@@ -17,6 +17,8 @@ import uuid
 from sources.llm_provider import Provider
 from sources.interaction import Interaction
 from sources.agents import CasualAgent, CoderAgent, FileAgent, PlannerAgent, BrowserAgent
+from sources.agents import ReportAgent
+from sources.pipeline import AgentPipeline
 from sources.browser import Browser, create_driver
 from sources.utility import pretty_print
 from sources.logger import Logger
@@ -88,6 +90,11 @@ def initialize_system():
             name="Planner",
             prompt_path=f"prompts/{personality_folder}/planner_agent.txt",
             provider=provider, verbose=False, browser=browser
+        ),
+        ReportAgent(
+            name="Reporter",
+            prompt_path=f"prompts/{personality_folder}/casual_agent.txt",
+            provider=provider, verbose=False
         )
     ]
     logger.info("Agents initialized")
@@ -103,8 +110,9 @@ def initialize_system():
     return interaction
 
 interaction = initialize_system()
+reporter_agent = next((a for a in interaction.agents if isinstance(a, ReportAgent)), None)
+pipeline = AgentPipeline(interaction.router, interaction.agents, reporter_agent)
 is_generating = False
-query_resp_history = []
 
 @api.get("/screenshot")
 async def get_screenshot():
@@ -136,28 +144,7 @@ async def stop():
 
 @api.get("/latest_answer")
 async def get_latest_answer():
-    global query_resp_history
-    if interaction.current_agent is None:
-        return JSONResponse(status_code=404, content={"error": "No agent available"})
-    uid = str(uuid.uuid4())
-    if not any(q["answer"] == interaction.current_agent.last_answer for q in query_resp_history):
-        query_resp = {
-            "done": "false",
-            "answer": interaction.current_agent.last_answer,
-            "reasoning": interaction.current_agent.last_reasoning,
-            "agent_name": interaction.current_agent.agent_name if interaction.current_agent else "None",
-            "success": interaction.current_agent.success,
-            "blocks": {f'{i}': block.jsonify() for i, block in enumerate(interaction.get_last_blocks_result())} if interaction.current_agent else {},
-            "status": interaction.current_agent.get_status_message if interaction.current_agent else "No status available",
-            "uid": uid
-        }
-        interaction.current_agent.last_answer = ""
-        interaction.current_agent.last_reasoning = ""
-        query_resp_history.append(query_resp)
-        return JSONResponse(status_code=200, content=query_resp)
-    if query_resp_history:
-        return JSONResponse(status_code=200, content=query_resp_history[-1])
-    return JSONResponse(status_code=404, content={"error": "No answer available"})
+    return JSONResponse(status_code=200, content=pipeline.latest_data())
 
 async def think_wrapper(interaction, query):
     try:
@@ -182,89 +169,27 @@ async def think_wrapper(interaction, query):
 
 @api.post("/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
-    global is_generating, query_resp_history
+    global is_generating
     logger.info(f"Processing query: {request.query}")
-    query_resp = QueryResponse(
-        done="false",
-        answer="",
-        reasoning="",
-        agent_name="Unknown",
-        success="false",
-        blocks={},
-        status="Ready",
-        uid=str(uuid.uuid4())
-    )
     if is_generating:
-        logger.warning("Another query is being processed, please wait.")
-        return JSONResponse(status_code=429, content=query_resp.jsonify())
+        return JSONResponse(status_code=429, content={"error": "busy"})
 
     try:
         is_generating = True
-        success = await think_wrapper(interaction, request.query)
+        await pipeline.run(request.query)
         is_generating = False
-
-        if not success:
-            query_resp.answer = interaction.last_answer
-            query_resp.reasoning = interaction.last_reasoning
-            return JSONResponse(status_code=400, content=query_resp.jsonify())
-
-        if interaction.current_agent:
-            blocks_json = {f'{i}': block.jsonify() for i, block in enumerate(interaction.current_agent.get_blocks_result())}
-        else:
-            logger.error("No current agent found")
-            blocks_json = {}
-            query_resp.answer = "Error: No current agent"
-            return JSONResponse(status_code=400, content=query_resp.jsonify())
-
-        logger.info(f"Answer: {interaction.last_answer}")
-        logger.info(f"Blocks: {blocks_json}")
-        query_resp.done = "true"
-        query_resp.answer = interaction.last_answer
-        query_resp.reasoning = interaction.last_reasoning
-        query_resp.agent_name = interaction.current_agent.agent_name
-        query_resp.success = str(interaction.last_success)
-        query_resp.blocks = blocks_json
-        
-        query_resp_dict = {
-            "done": query_resp.done,
-            "answer": query_resp.answer,
-            "agent_name": query_resp.agent_name,
-            "success": query_resp.success,
-            "blocks": query_resp.blocks,
-            "status": query_resp.status,
-            "uid": query_resp.uid
-        }
-        query_resp_history.append(query_resp_dict)
-
-        logger.info("Query processed successfully")
-        return JSONResponse(status_code=200, content=query_resp.jsonify())
+        return JSONResponse(status_code=200, content=pipeline.latest_data())
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}")
-        sys.exit(1)
-    finally:
-        logger.info("Processing finished")
-        if config.getboolean('MAIN', 'save_session'):
-            interaction.save_session()
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @api.get("/current_plan")
 async def get_current_plan():
-    """
-    Get the current plan from the planner agent.
-    """
-    if not interaction:
-        return {"error": "No interaction instance available"}
-    
-    # Find the planner agent in the agents list
-    planner_agent = None
-    for agent in interaction.agents:
-        if isinstance(agent, PlannerAgent):
-            planner_agent = agent
-            break
-    
-    if not planner_agent:
-        return {"error": "No planner agent available"}
-    
-    return {"plan": planner_agent.get_current_plan()}
+    return {
+        "plan": pipeline.current_plan,
+        "subtask_status": pipeline.subtask_status,
+        "final_report_url": pipeline.final_report_url,
+    }
 
 if __name__ == "__main__":
     uvicorn.run(api, host="0.0.0.0", port=8000)

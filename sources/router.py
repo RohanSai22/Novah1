@@ -30,6 +30,13 @@ class AgentRouter:
         self.learn_few_shots_tasks()
         self.learn_few_shots_complexity()
         self.asked_clarify = False
+
+    def summarize_intent(self, prompt: str) -> str:
+        """Quickly rephrase the user's prompt into a one-sentence intent summary."""
+        try:
+            return self.lang_analysis.translate(prompt, self.lang_analysis.detect_language(prompt))
+        except Exception:
+            return prompt
     
     def load_pipelines(self) -> Dict[str, Type[pipeline]]:
         """

@@ -170,6 +170,17 @@ class PlannerAgent(Agent):
             ok = True
         self.logger.info(f"Plan made:\n{answer}")
         return self.parse_agent_tasks(answer)
+
+    async def make_plan_v2(self, prompt: str):
+        plans = await self.make_plan(prompt)
+        formatted = []
+        for task_name, task in plans:
+            formatted.append({
+                "task": task_name,
+                "tool": task['agent'],
+                "subtasks": [task['task']]
+            })
+        return formatted
     
     async def update_plan(self, goal: str, agents_tasks: List[dict], agents_work_result: dict, id: str, success: bool) -> dict:
         """

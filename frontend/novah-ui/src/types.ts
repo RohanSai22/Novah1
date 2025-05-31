@@ -20,3 +20,14 @@ export interface Thread {
   messages: Message[];
   blocks: ToolOutput[] | null;
 }
+
+export interface PlanItem {
+  task: string;
+  tool: string;
+  subtasks: string[];
+}
+
+export interface SubtaskStatus {
+  subtask: string;
+  status: string;
+}
