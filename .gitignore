@@ -204,3 +204,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Virtual environments
+novah_env/
+a_v
