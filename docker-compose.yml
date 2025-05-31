@@ -55,9 +55,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.frontend
     ports:
-      - "3000:3000"
+      - "5173:5173"
     volumes:
-      - ./frontend/agentic-seek-front/src:/app/src
+      - ./frontend/novah-ui/src:/app/src
       - ./screenshots:/app/screenshots
     environment:
       - NODE_ENV=development

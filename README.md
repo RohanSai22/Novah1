@@ -255,13 +255,13 @@ Start the backend.
 python3 api.py
 ```
 
-Go to `http://localhost:3000/` and you should see the web interface.
+Go to `http://localhost:5173/` and you should see the web interface.
 
 ---
 
 ## Usage
 
-Make sure the services are up and running with `./start_services.sh` and run the Novah with `python3 cli.py` for CLI mode or `python3 api.py` then go to `localhost:3000` for web interface.
+Make sure the services are up and running with `./start_services.sh` and run the Novah with `python3 cli.py` for CLI mode or `python3 api.py` then go to `localhost:5173` for web interface.
 
 You can also use speech to text by setting `listen = True` in the config. Only for CLI mode.
 
