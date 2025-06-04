@@ -5,6 +5,7 @@ from .casual_agent import CasualAgent
 from .file_agent import FileAgent
 from .planner_agent import PlannerAgent
 from .browser_agent import BrowserAgent
+from .search_agent import SearchAgent
 from .mcp_agent import McpAgent
 from .report_agent import ReportAgent
 
@@ -15,6 +16,7 @@ __all__ = [
     "FileAgent",
     "PlannerAgent",
     "BrowserAgent",
+    "SearchAgent",
     "McpAgent",
     "ReportAgent",
 ]

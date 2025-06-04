@@ -1,5 +1,6 @@
 import re
 import time
+import os
 from datetime import date
 from typing import List, Tuple, Type, Dict
 from enum import Enum
@@ -42,7 +43,9 @@ class BrowserAgent(Agent):
                         recover_last_session=False, # session recovery in handled by the interaction class
                         memory_compression=False,
                         model_provider=provider.get_model_name())
-    
+        self.screenshots_taken = []
+        self.pages_visited = []
+
     def get_today_date(self) -> str:
         """Get the date"""
         date_time = date.today()
@@ -324,6 +327,133 @@ class BrowserAgent(Agent):
         """
         return prompt
     
+    def capture_screenshot(self, url: str = None) -> str:
+        """Capture a screenshot of the current page with enhanced metadata"""
+        try:
+            if self.browser is None:
+                self.logger.warning("Browser not available for screenshot")
+                return None
+                
+            timestamp = int(time.time())
+            if url:
+                # Extract domain name for filename
+                domain = url.replace("https://", "").replace("http://", "").split("/")[0]
+                filename = f"screenshot_{domain}_{timestamp}.png"
+            else:
+                filename = f"screenshot_{timestamp}.png"
+                
+            success = self.browser.screenshot(filename)
+            if success:
+                screenshot_path = self.browser.get_screenshot()
+                self.screenshots_taken.append({
+                    "filename": filename,
+                    "path": screenshot_path,
+                    "url": url or self.current_page,
+                    "timestamp": timestamp
+                })
+                self.logger.info(f"Screenshot captured: {filename}")
+                return filename
+            else:
+                self.logger.error("Failed to capture screenshot")
+                return None
+        except Exception as e:
+            self.logger.error(f"Error capturing screenshot: {e}")
+            return None
+
+    def navigate_and_extract(self, url: str) -> Dict:
+        """Navigate to a URL and extract content with screenshot"""
+        try:
+            if self.browser is None:
+                self.logger.warning("Browser not available for navigation")
+                return {"success": False, "error": "Browser not available"}
+                
+            self.logger.info(f"Navigating to: {url}")
+            
+            # Navigate to URL
+            success = self.browser.go_to(url)
+            if not success:
+                return {"success": False, "error": "Failed to navigate to URL"}
+            
+            self.current_page = url
+            self.pages_visited.append(url)
+            
+            # Wait for page load
+            time.sleep(2)
+            
+            # Capture screenshot
+            screenshot_filename = self.capture_screenshot(url)
+            
+            # Extract page content
+            page_text = self.browser.get_text()
+            page_title = self.browser.get_title()
+            
+            # Extract links
+            links = self.browser.get_all_links()
+            
+            extracted_data = {
+                "success": True,
+                "url": url,
+                "title": page_title,
+                "content": page_text[:2000],  # Limit content length
+                "screenshot": screenshot_filename,
+                "links_found": len(links),
+                "timestamp": time.time()
+            }
+            
+            self.logger.info(f"Successfully extracted data from {url}")
+            return extracted_data
+            
+        except Exception as e:
+            self.logger.error(f"Error navigating and extracting from {url}: {e}")
+            return {"success": False, "error": str(e)}
+
+    def comprehensive_web_research(self, query: str, urls: List[str] = None) -> Dict:
+        """Perform comprehensive web research with navigation and screenshot capture"""
+        try:
+            results = {
+                "query": query,
+                "pages_processed": [],
+                "screenshots": [],
+                "extracted_content": [],
+                "total_pages": 0,
+                "success": True
+            }
+            
+            if not urls:
+                # If no URLs provided, perform a search first
+                search_results = self.tools["web_search"].search(query)
+                if search_results and "results" in search_results:
+                    urls = [r.get("url") for r in search_results["results"][:5] if r.get("url")]
+            
+            if not urls:
+                return {"success": False, "error": "No URLs to process"}
+            
+            for url in urls[:5]:  # Limit to 5 URLs to avoid excessive processing
+                try:
+                    self.logger.info(f"Processing URL: {url}")
+                    extracted = self.navigate_and_extract(url)
+                    
+                    if extracted["success"]:
+                        results["pages_processed"].append(url)
+                        results["extracted_content"].append(extracted)
+                        if extracted.get("screenshot"):
+                            results["screenshots"].append(extracted["screenshot"])
+                    
+                    # Small delay between requests
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    self.logger.error(f"Error processing {url}: {e}")
+                    continue
+            
+            results["total_pages"] = len(results["pages_processed"])
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in comprehensive web research: {e}")
+            return {"success": False, "error": str(e)}
+
     async def process(self, user_prompt: str, speech_module: type) -> Tuple[str, str]:
         """
         Process the user prompt to conduct an autonomous web search.

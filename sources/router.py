@@ -34,9 +34,55 @@ class AgentRouter:
     def summarize_intent(self, prompt: str) -> str:
         """Quickly rephrase the user's prompt into a one-sentence intent summary."""
         try:
-            return self.lang_analysis.translate(prompt, self.lang_analysis.detect_language(prompt))
+            # For now, just return translated text, but this could be enhanced with LLM summarization
+            translated = self.lang_analysis.translate(prompt, self.lang_analysis.detect_language(prompt))
+            return translated
         except Exception:
             return prompt
+    
+    def should_use_planner(self, text: str) -> bool:
+        """
+        Determine if the task requires the planner agent based on explicit rules.
+        Args:
+            text (str): The input text
+        Returns:
+            bool: True if should use planner, False otherwise
+        """
+        text_lower = text.lower()
+        
+        # Multi-step indicators
+        multi_step_keywords = ["then", "after", "next", "also", "and build", "and create", "and make"]
+        has_multi_step = any(keyword in text_lower for keyword in multi_step_keywords)
+        
+        # Complex task keywords
+        complex_keywords = ["plan", "research", "analyze", "build", "create", "develop", "design", 
+                           "implement", "generate", "compile", "report", "summary", "comprehensive"]
+        has_complex_task = any(keyword in text_lower for keyword in complex_keywords)
+        
+        # API + app building patterns
+        api_app_patterns = ["api and", "find api", "build app", "create app", "web app", "flask app"]
+        has_api_app = any(pattern in text_lower for pattern in api_app_patterns)
+        
+        # File + action patterns
+        file_action_patterns = ["find file and", "locate file and", "use file and", "file then"]
+        has_file_action = any(pattern in text_lower for pattern in file_action_patterns)
+        
+        # Length-based complexity (longer tasks are often more complex)
+        is_long_task = len(text.split()) > 15
+        
+        # Complexity estimation
+        complexity_high = self.estimate_complexity(text) == "HIGH"
+        
+        # Combine all indicators
+        should_plan = (complexity_high or has_multi_step or has_complex_task or 
+                      has_api_app or has_file_action or is_long_task)
+        
+        if should_plan:
+            self.logger.info(f"Routing to planner - complexity: {complexity_high}, multi_step: {has_multi_step}, "
+                           f"complex_task: {has_complex_task}, api_app: {has_api_app}, file_action: {has_file_action}, "
+                           f"long_task: {is_long_task}")
+        
+        return should_plan
     
     def load_pipelines(self) -> Dict[str, Type[pipeline]]:
         """
@@ -456,23 +502,40 @@ class AgentRouter:
         assert len(self.agents) > 0, "No agents available."
         if len(self.agents) == 1:
             return self.agents[0]
+        
         lang = self.lang_analysis.detect_language(text)
+        original_text = text
         text = self.find_first_sentence(text)
         text = self.lang_analysis.translate(text, lang)
+        
+        # Check if we should use planner first
+        if self.should_use_planner(original_text):
+            pretty_print(f"Complex/multi-step task detected, routing to planner agent.", color="info")
+            planner = self.find_planner_agent()
+            if planner:
+                return planner
+            else:
+                pretty_print(f"No planner agent found, falling back to regular routing.", color="warning")
+        
+        # Regular agent routing
         labels = [agent.role for agent in self.agents]
-        complexity = self.estimate_complexity(text)
-        if complexity == "HIGH":
-            pretty_print(f"Complex task detected, routing to planner agent.", color="info")
-            return self.find_planner_agent()
         try:
-            best_agent = self.router_vote(text, labels, log_confidence=False)
+            best_agent = self.router_vote(text, labels, log_confidence=True)
         except Exception as e:
-            raise e
+            self.logger.error(f"Error in router_vote: {str(e)}")
+            # Fallback to first available agent that's not planner
+            for agent in self.agents:
+                if agent.type != "planner_agent":
+                    pretty_print(f"Fallback to: {agent.agent_name}", color="warning")
+                    return agent
+            return self.agents[0]
+        
         for agent in self.agents:
             if best_agent == agent.role:
                 role_name = agent.role
                 pretty_print(f"Selected agent: {agent.agent_name} (roles: {role_name})", color="warning")
                 return agent
+        
         pretty_print(f"Error choosing agent.", color="failure")
         self.logger.error("No agent selected.")
         return None

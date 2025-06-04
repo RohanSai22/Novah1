@@ -6,6 +6,7 @@ from sources.agents.code_agent import CoderAgent
 from sources.agents.file_agent import FileAgent
 from sources.agents.browser_agent import BrowserAgent
 from sources.agents.casual_agent import CasualAgent
+from sources.agents.report_agent import ReportAgent
 from sources.text_to_speech import Speech
 from sources.tools.tools import Tools
 from sources.logger import Logger
@@ -36,6 +37,16 @@ class PlannerAgent(Agent):
                                 model_provider=provider.get_model_name())
         self.logger = Logger("planner_agent.log")
         self.current_plan = []
+        self.execution_state = {
+            "intent": "",
+            "plan": [],
+            "current_subtask": 0,
+            "subtask_status": [],
+            "agent_outputs": {},
+            "final_report_url": None,
+            "status": "idle",
+            "error": None
+        }
     
     def get_task_names(self, text: str) -> List[str]:
         """
@@ -172,15 +183,102 @@ class PlannerAgent(Agent):
         return self.parse_agent_tasks(answer)
 
     async def make_plan_v2(self, prompt: str):
+        """
+        Create a structured plan with subtasks in the required format.
+        Args:
+            prompt (str): The user's request
+        Returns:
+            List[dict]: Structured plan with tasks and subtasks
+        """
+        # First, get the intent summary
+        self.execution_state["intent"] = prompt.strip()
+        self.execution_state["status"] = "planning"
+        
         plans = await self.make_plan(prompt)
         formatted = []
-        for task_name, task in plans:
-            formatted.append({
+        
+        for i, (task_name, task) in enumerate(plans):
+            # Convert old format to new structured format
+            subtasks = []
+            if isinstance(task, dict):
+                # Break down the main task into subtasks
+                main_task = task.get('task', task_name)
+                agent_type = task.get('agent', 'casual').lower()
+                
+                # Create meaningful subtasks based on agent type
+                if agent_type == 'web':
+                    subtasks = [
+                        f"Search for: {main_task}",
+                        f"Extract relevant information",
+                        f"Summarize findings"
+                    ]
+                elif agent_type == 'coder':
+                    subtasks = [
+                        f"Plan code structure",
+                        f"Implement: {main_task}",
+                        f"Test and debug"
+                    ]
+                elif agent_type == 'file':
+                    subtasks = [
+                        f"Locate files",
+                        f"Process: {main_task}",
+                        f"Organize results"
+                    ]
+                else:
+                    subtasks = [main_task]
+            
+            formatted_task = {
                 "task": task_name,
-                "tool": task['agent'],
-                "subtasks": [task['task']]
-            })
+                "tool": task.get('agent', 'CasualAgent') if isinstance(task, dict) else 'CasualAgent',
+                "subtasks": subtasks,
+                "status": "pending"
+            }
+            formatted.append(formatted_task)
+            
+            # Initialize subtask status
+            for subtask in subtasks:
+                self.execution_state["subtask_status"].append({
+                    "task_id": i,
+                    "subtask": subtask,
+                    "status": "pending",
+                    "agent": formatted_task["tool"],
+                    "output": ""
+                })
+        
+        self.execution_state["plan"] = formatted
         return formatted
+    
+    def update_subtask_status(self, task_id: int, subtask_index: int, status: str, output: str = ""):
+        """
+        Update the status of a specific subtask.
+        Args:
+            task_id (int): The task ID
+            subtask_index (int): The subtask index
+            status (str): New status (pending, running, completed, failed)
+            output (str): Output from the agent
+        """
+        for subtask_status in self.execution_state["subtask_status"]:
+            if (subtask_status["task_id"] == task_id and 
+                subtask_status["subtask"].split()[0] == 
+                self.execution_state["plan"][task_id]["subtasks"][subtask_index].split()[0]):
+                subtask_status["status"] = status
+                if output:
+                    subtask_status["output"] = output
+                break
+        
+        # Update overall task status
+        if task_id < len(self.execution_state["plan"]):
+            task_subtasks = [s for s in self.execution_state["subtask_status"] if s["task_id"] == task_id]
+            if all(s["status"] == "completed" for s in task_subtasks):
+                self.execution_state["plan"][task_id]["status"] = "completed"
+            elif any(s["status"] == "failed" for s in task_subtasks):
+                self.execution_state["plan"][task_id]["status"] = "failed"
+            elif any(s["status"] == "running" for s in task_subtasks):
+                self.execution_state["plan"][task_id]["status"] = "running"
+    
+    def get_execution_state(self):
+        """Get the current execution state for API responses."""
+        return self.execution_state
     
     async def update_plan(self, goal: str, agents_tasks: List[dict], agents_work_result: dict, id: str, success: bool) -> dict:
         """
@@ -275,7 +373,18 @@ class PlannerAgent(Agent):
         final_summary = []
 
         self.status_message = "Making a plan..."
-        agents_tasks = await self.make_plan(goal)
+        self.execution_state["status"] = "planning"
+        
+        # Create structured plan
+        structured_plan = await self.make_plan_v2(goal)
+        
+        if not structured_plan:
+            self.execution_state["status"] = "failed"
+            self.execution_state["error"] = "Failed to create plan"
+            return "Failed to parse the tasks.", ""
+        
+        self.execution_state["status"] = "executing"
+        agents_tasks = await self.make_plan(goal)  # Get original format for execution
 
         if agents_tasks == []:
             return "Failed to parse the tasks.", ""
@@ -285,20 +394,43 @@ class PlannerAgent(Agent):
         while i < steps and not self.stop:
             task_name, task = agents_tasks[i][0], agents_tasks[i][1]
             self.status_message = "Starting agents..."
+            
+            # Update subtask status to running
+            if i < len(structured_plan):
+                for j, subtask in enumerate(structured_plan[i]["subtasks"]):
+                    self.update_subtask_status(i, j, "running")
+            
             pretty_print(f"I will {task_name}.", color="info")
             self.last_answer = f"I will {task_name.lower()}."
             pretty_print(f"Assigned agent {task['agent']} to {task_name}", color="info")
-            if speech_module: speech_module.speak(f"I will {task_name}. I assigned the {task['agent']} agent to the task.")
+            if speech_module: 
+                speech_module.speak(f"I will {task_name}. I assigned the {task['agent']} agent to the task.")
 
             if agents_work_result is not None:
                 required_infos = self.get_work_result_agent(task['need'], agents_work_result)
+            
             try:
                 answer, success = await self.start_agent_process(task, required_infos)
                 final_summary.append(f"Task {i+1}: {task_name}\nResult: {answer}\n")
+                
+                # Update subtask status
+                if i < len(structured_plan):
+                    for j, subtask in enumerate(structured_plan[i]["subtasks"]):
+                        status = "completed" if success else "failed"
+                        self.update_subtask_status(i, j, status, answer)
+                
             except Exception as e:
+                # Mark subtasks as failed
+                if i < len(structured_plan):
+                    for j, subtask in enumerate(structured_plan[i]["subtasks"]):
+                        self.update_subtask_status(i, j, "failed", str(e))
                 raise e
+                
             if self.stop:
                 pretty_print(f"Requested stop.", color="failure")
+                self.execution_state["status"] = "stopped"
+                break
+                
             agents_work_result[task['id']] = answer
             agents_tasks = await self.update_plan(goal, agents_tasks, agents_work_result, task['id'], success)
             steps = len(agents_tasks)
@@ -309,7 +441,46 @@ class PlannerAgent(Agent):
         summary += "\n".join(final_summary)
         summary += f"\n\nOverall Goal: {goal}\n"
         summary += "=== End of Summary ===\n"
-
+        
+        # Generate comprehensive report using ReportAgent
+        self.execution_state["status"] = "generating_report"
+        try:
+            # Create ReportAgent instance
+            report_agent = ReportAgent(
+                name="Report Generator",
+                prompt_path="prompts/base/report_agent.txt",  # Default to base if jarvis doesn't exist
+                provider=self.provider,
+                verbose=False
+            )
+            
+            # Prepare execution data for report
+            execution_data = {
+                "intent": goal,
+                "plan": [task["task"] for task in structured_plan],
+                "subtask_status": self.execution_state.get("subtask_status", []),
+                "agent_outputs": agents_work_result
+            }
+            
+            # Generate the report
+            report_result, report_reasoning = await report_agent.process(
+                f"Generate a comprehensive execution report for: {goal}",
+                execution_data=execution_data
+            )
+            
+            # Extract PDF path from report result
+            pdf_path = None
+            if "Report saved to:" in report_result:
+                pdf_path = report_result.split("Report saved to:")[-1].strip()
+                self.execution_state["final_report_url"] = pdf_path
+                summary += f"\n\nDetailed report generated: {pdf_path}"
+            
+            pretty_print(f"Execution report generated: {pdf_path}", color="success")
+            
+        except Exception as e:
+            pretty_print(f"Warning: Could not generate execution report: {str(e)}", color="warning")
+            # Continue with normal summary even if report generation fails
+        
+        self.execution_state["status"] = "completed"
         return summary, ""
 
     def get_current_plan(self):

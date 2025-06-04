@@ -46,3 +46,6 @@ openai
 sniffio
 ordered_set
 pypinyin
+requests
+reportlab
+uvicorn

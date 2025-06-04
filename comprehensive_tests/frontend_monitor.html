@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend Interaction Monitor</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+            font-size: 14px;
+        }
+        .monitor-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .monitor-section {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            border-left: 4px solid #007acc;
+        }
+        .log-container {
+            height: 400px;
+            overflow-y: auto;
+            background: #1a1a1a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 8px;
+            border-radius: 4px;
+            border-left: 3px solid #007acc;
+            background: #333;
+        }
+        .error { border-left-color: #ff4444; background: #441111; }
+        .warning { border-left-color: #ffaa00; background: #443311; }
+        .success { border-left-color: #44ff44; background: #114411; }
+        .api-call { border-left-color: #00aaff; background: #001144; }
+        .timestamp {
+            color: #888;
+            font-size: 12px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover { background: #005a9e; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #333;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007acc;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Novah Frontend Interaction Monitor</h1>
+    
+    <div class="controls">
+        <button onclick="clearLogs()">Clear Logs</button>
+        <button onclick="exportLogs()">Export Logs</button>
+        <button onclick="testConnection()">Test Backend Connection</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat-card">
+            <div class="stat-number" id="totalInteractions">0</div>
+            <div>Total Interactions</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="apiCalls">0</div>
+            <div>API Calls</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="errors">0</div>
+            <div>Errors</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="avgResponseTime">0ms</div>
+            <div>Avg Response</div>
+        </div>
+    </div>
+
+    <div class="monitor-container">
+        <div class="monitor-section">
+            <h3>🎯 Frontend Interactions</h3>
+            <div class="log-container" id="frontendLogs"></div>
+        </div>
+        
+        <div class="monitor-section">
+            <h3>🔗 API Calls & Responses</h3>
+            <div class="log-container" id="apiLogs"></div>
+        </div>
+    </div>
+
+    <script>
+        // Monitoring state
+        let interactionCount = 0;
+        let apiCallCount = 0;
+        let errorCount = 0;
+        let responseTimes = [];
+
+        // Log functions
+        function logInteraction(type, message, details = {}) {
+            interactionCount++;
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry ${type}`;
+            logEntry.innerHTML = `
+                <div class="timestamp">${timestamp}</div>
+                <div><strong>${type.toUpperCase()}:</strong> ${message}</div>
+                ${Object.keys(details).length ? `<div style="margin-top:5px; font-size:12px;">${JSON.stringify(details, null, 2)}</div>` : ''}
+            `;
+            
+            document.getElementById('frontendLogs').appendChild(logEntry);
+            document.getElementById('frontendLogs').scrollTop = document.getElementById('frontendLogs').scrollHeight;
+            updateStats();
+        }
+
+        function logApiCall(method, url, status, responseTime, details = {}) {
+            apiCallCount++;
+            if (responseTime) responseTimes.push(responseTime);
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry api-call`;
+            logEntry.innerHTML = `
+                <div class="timestamp">${timestamp}</div>
+                <div><strong>${method}</strong> ${url}</div>
+                <div>Status: ${status} | Time: ${responseTime}ms</div>
+                ${Object.keys(details).length ? `<div style="margin-top:5px; font-size:12px;">${JSON.stringify(details, null, 2)}</div>` : ''}
+            `;
+            
+            document.getElementById('apiLogs').appendChild(logEntry);
+            document.getElementById('apiLogs').scrollTop = document.getElementById('apiLogs').scrollHeight;
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('totalInteractions').textContent = interactionCount;
+            document.getElementById('apiCalls').textContent = apiCallCount;
+            document.getElementById('errors').textContent = errorCount;
+            
+            const avgTime = responseTimes.length > 0 ? 
+                Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0;
+            document.getElementById('avgResponseTime').textContent = avgTime + 'ms';
+        }
+
+        function clearLogs() {
+            document.getElementById('frontendLogs').innerHTML = '';
+            document.getElementById('apiLogs').innerHTML = '';
+            interactionCount = 0;
+            apiCallCount = 0;
+            errorCount = 0;
+            responseTimes = [];
+            updateStats();
+            logInteraction('info', 'Logs cleared');
+        }
+
+        function exportLogs() {
+            const logs = {
+                timestamp: new Date().toISOString(),
+                stats: {
+                    totalInteractions: interactionCount,
+                    apiCalls: apiCallCount,
+                    errors: errorCount,
+                    avgResponseTime: responseTimes.length > 0 ? 
+                        Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) : 0
+                },
+                frontendLogs: document.getElementById('frontendLogs').innerHTML,
+                apiLogs: document.getElementById('apiLogs').innerHTML
+            };
+            
+            const blob = new Blob([JSON.stringify(logs, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `novah-monitoring-${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            logInteraction('info', 'Logs exported');
+        }
+
+        async function testConnection() {
+            const startTime = Date.now();
+            try {
+                const response = await fetch('http://localhost:8000/health');
+                const responseTime = Date.now() - startTime;
+                
+                if (response.ok) {
+                    logApiCall('GET', '/health', response.status, responseTime);
+                    logInteraction('success', 'Backend connection test successful');
+                } else {
+                    errorCount++;
+                    logInteraction('error', `Backend connection test failed: ${response.status}`);
+                }
+            } catch (error) {
+                errorCount++;
+                logInteraction('error', `Backend connection test failed: ${error.message}`);
+            }
+            updateStats();
+        }
+
+        // Monitor network requests
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+            const startTime = Date.now();
+            const url = args[0];
+            const options = args[1] || {};
+            
+            logInteraction('info', `API Request initiated: ${options.method || 'GET'} ${url}`);
+            
+            return originalFetch.apply(this, args)
+                .then(response => {
+                    const responseTime = Date.now() - startTime;
+                    logApiCall(options.method || 'GET', url, response.status, responseTime);
+                    
+                    if (!response.ok) {
+                        errorCount++;
+                        logInteraction('error', `API request failed: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    return response;
+                })
+                .catch(error => {
+                    const responseTime = Date.now() - startTime;
+                    errorCount++;
+                    logApiCall(options.method || 'GET', url, 'ERROR', responseTime, { error: error.message });
+                    logInteraction('error', `API request error: ${error.message}`);
+                    throw error;
+                });
+        };
+
+        // Monitor console errors
+        const originalConsoleError = console.error;
+        console.error = function(...args) {
+            errorCount++;
+            logInteraction('error', `Console Error: ${args.join(' ')}`);
+            return originalConsoleError.apply(this, args);
+        };
+
+        // Monitor window errors
+        window.addEventListener('error', (event) => {
+            errorCount++;
+            logInteraction('error', `JavaScript Error: ${event.message}`, {
+                filename: event.filename,
+                line: event.lineno,
+                column: event.colno
+            });
+        });
+
+        // Initial setup
+        logInteraction('info', 'Frontend monitoring started');
+        testConnection();
+
+        // Auto-refresh stats every 5 seconds
+        setInterval(updateStats, 5000);
+    </script>
+</body>
+</html>

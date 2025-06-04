@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nova AI System Test Interface</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .test-section {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-result {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .success { background: #2d5a2d; border-left: 4px solid #4caf50; }
+        .error { background: #5a2d2d; border-left: 4px solid #f44336; }
+        .warning { background: #5a5a2d; border-left: 4px solid #ff9800; }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #005a9e; }
+        textarea {
+            width: 100%;
+            height: 100px;
+            background: #1a1a1a;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 10px;
+        }
+        .query-input {
+            width: 70%;
+            padding: 10px;
+            background: #1a1a1a;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 4px;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-online { background: #4caf50; }
+        .status-offline { background: #f44336; }
+        .status-unknown { background: #ff9800; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Nova AI System Test Interface</h1>
+        
+        <!-- Service Status Section -->
+        <div class="test-section">
+            <h2>📊 Service Status</h2>
+            <div id="status-display">
+                <div><span id="frontend-status" class="status-indicator status-unknown"></span>Frontend (localhost:5173): <span id="frontend-text">Checking...</span></div>
+                <div><span id="backend-status" class="status-indicator status-unknown"></span>Backend API (localhost:8000): <span id="backend-text">Checking...</span></div>
+            </div>
+            <button onclick="checkServiceStatus()">🔄 Refresh Status</button>
+        </div>
+
+        <!-- API Testing Section -->
+        <div class="test-section">
+            <h2>🧪 API Endpoint Tests</h2>
+            <div id="api-test-results"></div>
+            <button onclick="runAPITests()">▶️ Run API Tests</button>
+            <button onclick="testCORS()">🌐 Test CORS</button>
+        </div>
+
+        <!-- Query Testing Section -->
+        <div class="test-section">
+            <h2>💬 Query Testing</h2>
+            <div style="margin-bottom: 10px;">
+                <input type="text" id="test-query" class="query-input" placeholder="Enter test query..." value="What is artificial intelligence?">
+                <button onclick="sendTestQuery()">📤 Send Query</button>
+            </div>
+            <div id="query-results"></div>
+        </div>
+
+        <!-- Frontend Integration Test -->
+        <div class="test-section">
+            <h2>🖥️ Frontend Integration Test</h2>
+            <p>Open the Nova AI frontend and test UI interactions:</p>
+            <button onclick="openFrontend()">🌐 Open Frontend</button>
+            <button onclick="testFrontendAPI()">🔗 Test Frontend API Connection</button>
+            <div id="frontend-test-results"></div>
+        </div>
+
+        <!-- System Load Test -->
+        <div class="test-section">
+            <h2>⚡ System Load Test</h2>
+            <button onclick="runLoadTest()">🚀 Run Load Test (3 concurrent queries)</button>
+            <div id="load-test-results"></div>
+        </div>
+
+        <!-- Logs and Details -->
+        <div class="test-section">
+            <h2>📋 Test Logs</h2>
+            <textarea id="test-logs" readonly placeholder="Test logs will appear here..."></textarea>
+            <button onclick="clearLogs()">🗑️ Clear Logs</button>
+            <button onclick="exportLogs()">💾 Export Logs</button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const FRONTEND_BASE = 'http://localhost:5173';
+        
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            const logs = document.getElementById('test-logs');
+            logs.value += `[${timestamp}] ${message}\n`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(message);
+        }
+
+        function addResult(containerId, type, message) {
+            const container = document.getElementById(containerId);
+            const div = document.createElement('div');
+            div.className = `test-result ${type}`;
+            div.innerHTML = message;
+            container.appendChild(div);
+        }
+
+        async function checkServiceStatus() {
+            log('Checking service status...');
+            
+            // Check Frontend
+            try {
+                const response = await fetch(FRONTEND_BASE, { method: 'GET', mode: 'no-cors' });
+                document.getElementById('frontend-status').className = 'status-indicator status-online';
+                document.getElementById('frontend-text').textContent = 'Online';
+                log('✅ Frontend is accessible');
+            } catch (error) {
+                document.getElementById('frontend-status').className = 'status-indicator status-offline';
+                document.getElementById('frontend-text').textContent = 'Offline';
+                log('❌ Frontend is not accessible: ' + error.message);
+            }
+
+            // Check Backend
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('backend-status').className = 'status-indicator status-online';
+                    document.getElementById('backend-text').textContent = 'Online';
+                    log('✅ Backend API is running: ' + JSON.stringify(data));
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            } catch (error) {
+                document.getElementById('backend-status').className = 'status-indicator status-offline';
+                document.getElementById('backend-text').textContent = 'Offline';
+                log('❌ Backend API is not accessible: ' + error.message);
+            }
+        }
+
+        async function runAPITests() {
+            log('Starting API endpoint tests...');
+            const container = document.getElementById('api-test-results');
+            container.innerHTML = '';
+
+            // Test Health Endpoint
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    addResult('api-test-results', 'success', '✅ Health endpoint: OK');
+                    log('Health endpoint test passed');
+                } else {
+                    addResult('api-test-results', 'error', `❌ Health endpoint: HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addResult('api-test-results', 'error', `❌ Health endpoint: ${error.message}`);
+            }
+
+            // Test Latest Answer Endpoint
+            try {
+                const response = await fetch(`${API_BASE}/latest_answer`);
+                if (response.ok) {
+                    addResult('api-test-results', 'success', '✅ Latest answer endpoint: OK');
+                    log('Latest answer endpoint test passed');
+                } else {
+                    addResult('api-test-results', 'warning', `⚠️ Latest answer endpoint: HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addResult('api-test-results', 'error', `❌ Latest answer endpoint: ${error.message}`);
+            }
+
+            // Test Execution Status Endpoint
+            try {
+                const response = await fetch(`${API_BASE}/execution_status`);
+                if (response.ok) {
+                    addResult('api-test-results', 'success', '✅ Execution status endpoint: OK');
+                    log('Execution status endpoint test passed');
+                } else {
+                    addResult('api-test-results', 'warning', `⚠️ Execution status endpoint: HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addResult('api-test-results', 'error', `❌ Execution status endpoint: ${error.message}`);
+            }
+        }
+
+        async function testCORS() {
+            log('Testing CORS configuration...');
+            try {
+                const response = await fetch(`${API_BASE}/query`, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': FRONTEND_BASE,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'content-type'
+                    }
+                });
+                
+                if (response.ok) {
+                    const allowOrigin = response.headers.get('Access-Control-Allow-Origin');
+                    const allowMethods = response.headers.get('Access-Control-Allow-Methods');
+                    addResult('api-test-results', 'success', `✅ CORS preflight: OK (Origin: ${allowOrigin})`);
+                    log('CORS test passed');
+                } else {
+                    addResult('api-test-results', 'error', `❌ CORS preflight: HTTP ${response.status}`);
+                }
+            } catch (error) {
+                addResult('api-test-results', 'error', `❌ CORS test: ${error.message}`);
+            }
+        }
+
+        async function sendTestQuery() {
+            const query = document.getElementById('test-query').value;
+            if (!query.trim()) {
+                alert('Please enter a test query');
+                return;
+            }
+
+            log(`Sending test query: "${query}"`);
+            const container = document.getElementById('query-results');
+            container.innerHTML = '<div class="test-result warning">⏳ Sending query...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE}/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Origin': FRONTEND_BASE
+                    },
+                    body: JSON.stringify({
+                        query: query,
+                        tts_enabled: false
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    container.innerHTML = `
+                        <div class="test-result success">
+                            ✅ Query successful!<br>
+                            <strong>Agent:</strong> ${data.agent_name || 'Unknown'}<br>
+                            <strong>Answer:</strong> ${(data.answer || 'No answer').substring(0, 200)}...
+                        </div>
+                    `;
+                    log('Query test passed');
+                } else {
+                    const errorText = await response.text();
+                    container.innerHTML = `<div class="test-result error">❌ Query failed: HTTP ${response.status}<br>${errorText}</div>`;
+                    log('Query test failed: ' + response.status);
+                }
+            } catch (error) {
+                container.innerHTML = `<div class="test-result error">❌ Query error: ${error.message}</div>`;
+                log('Query test error: ' + error.message);
+            }
+        }
+
+        function openFrontend() {
+            window.open(FRONTEND_BASE, '_blank');
+            log('Opened frontend in new tab');
+        }
+
+        async function testFrontendAPI() {
+            log('Testing frontend API connection simulation...');
+            try {
+                const response = await fetch(`${API_BASE}/query`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'Origin': FRONTEND_BASE
+                    },
+                    body: JSON.stringify({
+                        query: 'Frontend integration test',
+                        tts_enabled: false
+                    })
+                });
+
+                const container = document.getElementById('frontend-test-results');
+                if (response.ok) {
+                    container.innerHTML = '<div class="test-result success">✅ Frontend API connection: Working correctly</div>';
+                    log('Frontend API connection test passed');
+                } else {
+                    container.innerHTML = `<div class="test-result error">❌ Frontend API connection: Failed (${response.status})</div>`;
+                    log('Frontend API connection test failed');
+                }
+            } catch (error) {
+                const container = document.getElementById('frontend-test-results');
+                container.innerHTML = `<div class="test-result error">❌ Frontend API connection: ${error.message}</div>`;
+                log('Frontend API connection error: ' + error.message);
+            }
+        }
+
+        async function runLoadTest() {
+            log('Starting load test with 3 concurrent queries...');
+            const container = document.getElementById('load-test-results');
+            container.innerHTML = '<div class="test-result warning">⏳ Running load test...</div>';
+
+            const queries = [
+                'Load test query 1: What is machine learning?',
+                'Load test query 2: Explain artificial intelligence', 
+                'Load test query 3: How does deep learning work?'
+            ];
+
+            try {
+                const promises = queries.map(async (query, index) => {
+                    const startTime = Date.now();
+                    try {
+                        const response = await fetch(`${API_BASE}/query`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Origin': FRONTEND_BASE
+                            },
+                            body: JSON.stringify({
+                                query: query,
+                                tts_enabled: false
+                            })
+                        });
+                        const duration = Date.now() - startTime;
+                        return { index, success: response.ok, status: response.status, duration };
+                    } catch (error) {
+                        const duration = Date.now() - startTime;
+                        return { index, success: false, error: error.message, duration };
+                    }
+                });
+
+                const results = await Promise.all(promises);
+                const successful = results.filter(r => r.success).length;
+                const avgDuration = results.reduce((sum, r) => sum + r.duration, 0) / results.length;
+
+                container.innerHTML = `
+                    <div class="test-result ${successful >= 2 ? 'success' : 'warning'}">
+                        📊 Load test completed:<br>
+                        <strong>Successful:</strong> ${successful}/3<br>
+                        <strong>Average duration:</strong> ${avgDuration.toFixed(0)}ms
+                    </div>
+                `;
+                log(`Load test completed: ${successful}/3 successful, avg duration: ${avgDuration.toFixed(0)}ms`);
+            } catch (error) {
+                container.innerHTML = `<div class="test-result error">❌ Load test failed: ${error.message}</div>`;
+                log('Load test error: ' + error.message);
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('test-logs').value = '';
+            log('Logs cleared');
+        }
+
+        function exportLogs() {
+            const logs = document.getElementById('test-logs').value;
+            const blob = new Blob([logs], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `nova-ai-test-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            log('Logs exported');
+        }
+
+        // Auto-check status on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            log('Nova AI Test Interface loaded');
+            checkServiceStatus();
+        });
+    </script>
+</body>
+</html>
