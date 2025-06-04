@@ -40,6 +40,7 @@ export default function Home() {
             value={inputValue}
             onChange={setInputValue}
             multiline={true}
+            showDeepSearchToggle={true}
           />
         </motion.div>
 

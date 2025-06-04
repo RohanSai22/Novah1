@@ -1,0 +1,9 @@
+{
+  "query": "Research the latest developments in quantum computing and create a comprehensive report",
+  "options": {
+    "deep_search": true,
+    "use_browser": true,
+    "generate_report": true,
+    "include_code": false
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "query": "Test deep search integration from enhanced frontend",
+  "mode": "deep_research",
+  "quality_validation": true,
+  "generate_report": true
+}

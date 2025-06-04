@@ -7,11 +7,19 @@ import {
   SubtaskStatus,
   ExecutionState,
   QueryResponse,
+  QualityMetrics,
+  ExecutionMode,
+  // Add new types for enhanced features
+  CodeExecution,
+  Screenshot,
+  SearchResult,
+  TimelineStep,
+  AgentViewData,
 } from "../types";
 
 // Create an Axios instance with a base URL
 const apiClient = axios.create({
-  baseURL: "http://localhost:8001", // Updated to use port 8001 for minimal API
+  baseURL: "http://localhost:8002", // Updated to use port 8002 for minimal API
   withCredentials: false, // Don't send cookies with cross-origin requests
   headers: {
     "Content-Type": "application/json",
@@ -32,6 +40,23 @@ export function useChat(threadId: string) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRequestInProgress, setIsRequestInProgress] = useState(false);
 
+  // Add orchestrator-specific state and functions
+  const [orchestratorAvailable, setOrchestratorAvailable] = useState(false);
+  const [qualityMetrics, setQualityMetrics] = useState<QualityMetrics | null>(
+    null
+  );
+  const [executionModes, setExecutionModes] = useState<ExecutionMode[]>([]);
+  const [currentExecutionMode, setCurrentExecutionMode] = useState("fast");
+
+  // Enhanced state for new features
+  const [codeExecutions, setCodeExecutions] = useState<CodeExecution[]>([]);
+  const [screenshots, setScreenshots] = useState<Screenshot[]>([]);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [timeline, setTimeline] = useState<TimelineStep[]>([]);
+  const [agentViewData, setAgentViewData] = useState<AgentViewData | null>(
+    null
+  );
+
   useEffect(() => {
     // Only poll if processing and no consecutive errors
     if (!isProcessing) return;
@@ -39,9 +64,19 @@ export function useChat(threadId: string) {
     const interval = setInterval(() => {
       fetchLatest();
       fetchExecutionStatus();
+      fetchAgentViewData(); // Comprehensive data fetch
+      if (orchestratorAvailable) {
+        fetchQualityMetrics();
+      }
     }, 3000); // Polling every 3 seconds during processing
     return () => clearInterval(interval);
-  }, [isProcessing]);
+  }, [isProcessing, orchestratorAvailable]);
+
+  // Check orchestrator availability on mount
+  useEffect(() => {
+    checkOrchestratorStatus();
+    fetchExecutionModes();
+  }, []);
 
   const fetchLatest = async () => {
     if (!isProcessing) return; // Don't fetch when not processing
@@ -138,6 +173,184 @@ export function useChat(threadId: string) {
     } catch (err) {
       console.log("Could not check backend status:", err);
       return false; // Assume not busy if we can't check
+    }
+  };
+
+  const checkOrchestratorStatus = async () => {
+    try {
+      const { data } = await apiClient.get("/orchestrator_status");
+      setOrchestratorAvailable(data.available);
+    } catch (error) {
+      console.error("Failed to check orchestrator status:", error);
+      setOrchestratorAvailable(false);
+    }
+  };
+
+  const fetchExecutionModes = async () => {
+    try {
+      const { data } = await apiClient.get("/execution_modes");
+      setExecutionModes(data.modes || []);
+    } catch (error) {
+      console.error("Failed to fetch execution modes:", error);
+    }
+  };
+
+  const fetchQualityMetrics = async () => {
+    try {
+      const { data } = await apiClient.get("/quality_metrics");
+      if (data.available) {
+        setQualityMetrics(data.metrics);
+      }
+    } catch (error) {
+      console.error("Failed to fetch quality metrics:", error);
+    }
+  };
+
+  // Enhanced fetch functions for new features
+  const fetchCodeExecutions = async () => {
+    try {
+      const { data } = await apiClient.get("/code_executions");
+      setCodeExecutions(data.code_executions || []);
+    } catch (error) {
+      console.error("Failed to fetch code executions:", error);
+    }
+  };
+
+  const fetchScreenshots = async () => {
+    try {
+      const { data } = await apiClient.get("/screenshots");
+      const screenshotData = data.screenshots || {};
+      const allScreenshots: Screenshot[] = [];
+
+      // Flatten all screenshot types
+      Object.values(screenshotData).forEach((screenshots: any) => {
+        if (Array.isArray(screenshots)) {
+          allScreenshots.push(...screenshots);
+        }
+      });
+
+      setScreenshots(allScreenshots);
+    } catch (error) {
+      console.error("Failed to fetch screenshots:", error);
+    }
+  };
+
+  const fetchSearchResults = async () => {
+    try {
+      const { data } = await apiClient.get("/search_results");
+      setSearchResults(data.search_results || []);
+    } catch (error) {
+      console.error("Failed to fetch search results:", error);
+    }
+  };
+
+  const fetchTimelineData = async () => {
+    try {
+      const { data } = await apiClient.get("/timeline_data");
+      setTimeline(data.timeline || []);
+    } catch (error) {
+      console.error("Failed to fetch timeline data:", error);
+    }
+  };
+
+  const fetchAgentViewData = async () => {
+    try {
+      const { data } = await apiClient.get("/agent_view_data");
+      setAgentViewData(data);
+
+      // Update individual states from comprehensive data
+      if (data.plan) {
+        setPlan(data.plan.steps || []);
+        setSubStatus(data.plan.subtask_status || []);
+        setTimeline(data.plan.timeline || []);
+      }
+      if (data.browser) {
+        setScreenshots(data.browser.screenshots || []);
+      }
+      if (data.search) {
+        setSearchResults(data.search.results || []);
+      }
+      if (data.coding) {
+        setCodeExecutions(data.coding.executions || []);
+      }
+      if (data.report) {
+        setReportUrl(data.report.final_report_url || null);
+        setQualityMetrics(data.report.metrics || null);
+      }
+      if (data.execution) {
+        setExecutionState(data.execution as ExecutionState);
+        setIsProcessing(data.execution.is_processing);
+        setStatus(data.execution.status || "Ready");
+      }
+    } catch (error) {
+      console.error("Failed to fetch agent view data:", error);
+    }
+  };
+
+  const simulateCodeExecution = async (
+    code: string,
+    language: string = "python"
+  ) => {
+    try {
+      const { data } = await apiClient.post("/simulate_code_execution", {
+        code,
+        language,
+      });
+
+      // Refresh code executions
+      fetchCodeExecutions();
+
+      return data.execution;
+    } catch (error) {
+      console.error("Failed to simulate code execution:", error);
+      return null;
+    }
+  };
+
+  // Enhanced sendQuery function with orchestrator support
+  const sendOrchestratorQuery = async (
+    query: string,
+    executionMode: string = "fast",
+    qualityValidation: boolean = true,
+    generateReport: boolean = true
+  ) => {
+    if (isRequestInProgress || isProcessing) return;
+
+    try {
+      setIsRequestInProgress(true);
+      setIsProcessing(true);
+      setStatus("Starting orchestrator...");
+
+      const response = await apiClient.post("/orchestrator_query", {
+        query,
+        execution_mode: executionMode,
+        quality_validation: qualityValidation,
+        generate_report: generateReport,
+      });
+
+      if (response.status === 202) {
+        setCurrentExecutionMode(executionMode);
+        setMessages((prev) => [...prev, { type: "user", content: query }]);
+        setMessages((prev) => [
+          ...prev,
+          {
+            type: "agent",
+            content: `🧠 Starting ${
+              executionMode === "fast" ? "Fast Mode" : "Deep Research"
+            } orchestrator...`,
+            agentName: "Task Orchestrator",
+            status: "initializing",
+          },
+        ]);
+      }
+    } catch (error: any) {
+      console.error("Orchestrator query failed:", error);
+      setStatus(
+        `Error: ${error.response?.data?.error || "Orchestrator unavailable"}`
+      );
+      setIsProcessing(false);
+    } finally {
+      setIsRequestInProgress(false);
     }
   };
 
@@ -271,5 +484,23 @@ export function useChat(threadId: string) {
     executionState,
     isProcessing,
     isRequestInProgress,
+    orchestratorAvailable,
+    qualityMetrics,
+    executionModes,
+    currentExecutionMode,
+    sendOrchestratorQuery,
+    fetchQualityMetrics,
+    // Enhanced features
+    codeExecutions,
+    screenshots,
+    searchResults,
+    timeline,
+    agentViewData,
+    fetchCodeExecutions,
+    fetchScreenshots,
+    fetchSearchResults,
+    fetchTimelineData,
+    fetchAgentViewData,
+    simulateCodeExecution,
   };
 }

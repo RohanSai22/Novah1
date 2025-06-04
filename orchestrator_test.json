@@ -1,0 +1,6 @@
+{
+  "query": "Research the latest developments in quantum computing and create a comprehensive report",
+  "execution_mode": "deep_research",
+  "quality_validation": true,
+  "generate_report": true
+}

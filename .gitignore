@@ -9,7 +9,7 @@ test_agent.py
 config.ini
 .voices/
 experimental/
-.logs/
+###.logs/
 .screenshots/*.png
 .screenshots/*.jpg
 conversations/
@@ -21,8 +21,8 @@ dsk/
 
 ### react ###
 .DS_*
-*.log
-logs
+###*.log
+###logs
 **/*.backup.*
 **/*.back.*
 node_modules
