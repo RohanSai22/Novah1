@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import useAgent from "../store/useAgent";
 import axios from "axios";
 import {
   Message,
@@ -29,16 +30,22 @@ const apiClient = axios.create({
 
 export function useChat(threadId: string) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [blocks, setBlocks] = useState<ToolOutput[] | null>(null);
-  const [plan, setPlan] = useState<PlanItem[]>([]);
-  const [subStatus, setSubStatus] = useState<SubtaskStatus[]>([]);
-  const [reportUrl, setReportUrl] = useState<string | null>(null);
-  const [status, setStatus] = useState("Agents ready");
-  const [executionState, setExecutionState] = useState<ExecutionState | null>(
-    null
-  );
-  const [isProcessing, setIsProcessing] = useState(false);
   const [isRequestInProgress, setIsRequestInProgress] = useState(false);
+  const [blocks, setBlocks] = useState<ToolOutput[] | null>(null);
+
+  const agentStore = useAgent();
+  const {
+    plan,
+    subStatus,
+    reportUrl,
+    status,
+    executionState,
+    isProcessing,
+    currentAgent,
+    activeTool,
+    setState,
+    reset,
+  } = agentStore;
 
   // Add orchestrator-specific state and functions
   const [orchestratorAvailable, setOrchestratorAvailable] = useState(false);
@@ -108,22 +115,25 @@ export function useChat(threadId: string) {
 
       // Update execution state from latest answer
       if (data.execution_state) {
-        setExecutionState(data.execution_state);
-        setPlan(
-          data.execution_state.plan?.map((step, index) => ({
-            task: step,
-            tool: "PlannerAgent",
-            subtasks: [],
-            status: "pending",
-          })) || []
-        );
-        setSubStatus(data.execution_state.subtask_status || []);
-        setReportUrl(data.execution_state.final_report_url || null);
+        setState({
+          executionState: data.execution_state,
+          plan:
+            data.execution_state.plan?.map((step) => ({
+              task: step,
+              tool: "PlannerAgent",
+              subtasks: [],
+              status: "pending",
+            })) || [],
+          subStatus: data.execution_state.subtask_status || [],
+          reportUrl: data.execution_state.final_report_url || null,
+        });
       }
 
       setBlocks(data.blocks ? Object.values(data.blocks) : null);
-      setStatus(data.status || "Ready");
-      setIsProcessing(data.done === "false");
+      setState({
+        status: data.status || "Ready",
+        isProcessing: data.done === "false",
+      });
     } catch (err) {
       // Silently fail during polling to avoid console spam
       if (isProcessing) {
@@ -142,24 +152,21 @@ export function useChat(threadId: string) {
       const { data }: { data: any } = await apiClient.get("/execution_status");
 
       if (data.execution_state) {
-        setExecutionState(data.execution_state);
-
-        // Update plan from execution state
-        if (data.execution_state.plan) {
-          setPlan(
-            data.execution_state.plan.map((step: string, index: number) => ({
+        const newPlan = data.execution_state.plan
+          ? data.execution_state.plan.map((step: string) => ({
               task: step,
               tool: "PlannerAgent",
               subtasks: [],
               status: "pending",
             }))
-          );
-        }
+          : [];
+        setState({ executionState: data.execution_state, plan: newPlan });
 
-        // Update subtask status
-        setSubStatus(data.execution_state.subtask_status || []);
-        setReportUrl(data.execution_state.final_report_url || null);
-        setIsProcessing(data.is_active || false);
+        setState({
+          subStatus: data.execution_state.subtask_status || [],
+          reportUrl: data.execution_state.final_report_url || null,
+          isProcessing: data.is_active || false,
+        });
       }
     } catch (err) {
       // Execution status endpoint may not always have data, so don't log errors during polling
@@ -260,8 +267,10 @@ export function useChat(threadId: string) {
 
       // Update individual states from comprehensive data
       if (data.plan) {
-        setPlan(data.plan.steps || []);
-        setSubStatus(data.plan.subtask_status || []);
+        setState({
+          plan: data.plan.steps || [],
+          subStatus: data.plan.subtask_status || [],
+        });
         setTimeline(data.plan.timeline || []);
       }
       if (data.browser) {
@@ -274,13 +283,15 @@ export function useChat(threadId: string) {
         setCodeExecutions(data.coding.executions || []);
       }
       if (data.report) {
-        setReportUrl(data.report.final_report_url || null);
+        setState({ reportUrl: data.report.final_report_url || null });
         setQualityMetrics(data.report.metrics || null);
       }
       if (data.execution) {
-        setExecutionState(data.execution as ExecutionState);
-        setIsProcessing(data.execution.is_processing);
-        setStatus(data.execution.status || "Ready");
+        setState({
+          executionState: data.execution as ExecutionState,
+          isProcessing: data.execution.is_processing,
+          status: data.execution.status || "Ready",
+        });
       }
     } catch (error) {
       console.error("Failed to fetch agent view data:", error);
@@ -318,8 +329,7 @@ export function useChat(threadId: string) {
 
     try {
       setIsRequestInProgress(true);
-      setIsProcessing(true);
-      setStatus("Starting orchestrator...");
+      setState({ isProcessing: true, status: "Starting orchestrator..." });
 
       const response = await apiClient.post("/orchestrator_query", {
         query,
@@ -345,10 +355,12 @@ export function useChat(threadId: string) {
       }
     } catch (error: any) {
       console.error("Orchestrator query failed:", error);
-      setStatus(
-        `Error: ${error.response?.data?.error || "Orchestrator unavailable"}`
-      );
-      setIsProcessing(false);
+      setState({
+        status: `Error: ${
+          error.response?.data?.error || "Orchestrator unavailable"
+        }`,
+        isProcessing: false,
+      });
     } finally {
       setIsRequestInProgress(false);
     }
@@ -395,12 +407,14 @@ export function useChat(threadId: string) {
     setMessages((prev) => [...prev, { type: "user", content: q }]);
 
     // Reset all states for new query
-    setIsProcessing(true);
-    setExecutionState(null);
-    setPlan([]);
-    setSubStatus([]);
-    setReportUrl(null);
-    setStatus("Initializing...");
+    setState({
+      isProcessing: true,
+      executionState: null,
+      plan: [],
+      subStatus: [],
+      reportUrl: null,
+      status: "Initializing...",
+    });
     setBlocks(null);
 
     // Add a temporary "analyzing" message
@@ -443,8 +457,10 @@ export function useChat(threadId: string) {
           uid: `error-${Date.now()}`,
         },
       ]);
-      setIsProcessing(false);
-      setStatus(`Error: ${err.message || "Unknown error"}`);
+      setState({
+        isProcessing: false,
+        status: `Error: ${err.message || "Unknown error"}`,
+      });
     } finally {
       setIsRequestInProgress(false);
     }
@@ -453,7 +469,7 @@ export function useChat(threadId: string) {
   const stop = async () => {
     try {
       await apiClient.get("/stop");
-      setIsProcessing(false);
+      setState({ isProcessing: false });
     } catch (err) {
       console.error("Error stopping execution:", err);
     }
@@ -462,9 +478,11 @@ export function useChat(threadId: string) {
   const resetBackend = async () => {
     try {
       await apiClient.post("/reset");
-      setIsProcessing(false);
+      setState({
+        isProcessing: false,
+        status: "Backend reset - ready for new requests",
+      });
       setIsRequestInProgress(false);
-      setStatus("Backend reset - ready for new requests");
       console.log("Backend state reset successfully");
     } catch (err) {
       console.error("Error resetting backend:", err);

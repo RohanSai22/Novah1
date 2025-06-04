@@ -53,6 +53,13 @@ export default function Chat() {
     }
   }, [plan.length, subStatus.length]);
 
+  // Open workspace when an agent becomes active
+  useEffect(() => {
+    if (executionState?.current_agent) {
+      setShowWorkspace(true);
+    }
+  }, [executionState?.current_agent]);
+
   // Handle initial query from home page navigation
   useEffect(() => {
     const initialQuery = location.state?.initialQuery;

@@ -48,4 +48,6 @@ ordered_set
 pypinyin
 requests
 reportlab
+pandas>=2.0.0
+e2b-code-interpreter>=0.1.0
 uvicorn

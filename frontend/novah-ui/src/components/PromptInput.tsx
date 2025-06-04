@@ -105,18 +105,23 @@ export default function PromptInput({
           <div className="flex items-center justify-end gap-3 mt-4">
             {/* Deep Search Toggle - Only show on home screen */}
             {showDeepSearchToggle && (
-              <button
-                type="button"
-                onClick={() => setIsDeepSearch(!isDeepSearch)}
-                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
-                  isDeepSearch
-                    ? "bg-gradient-to-r from-purple-600/20 to-blue-600/20 border border-purple-500/30 text-purple-300"
-                    : "bg-gray-700/40 border border-gray-600/20 text-gray-400 hover:bg-gray-600/40"
-                }`}
-              >
-                <span className="text-lg">🧠</span>
-                <span>{isDeepSearch ? "Deep Search" : "Normal Search"}</span>
-              </button>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <span className="text-sm text-gray-300">Deep Search</span>
+                <span
+                  role="switch"
+                  aria-checked={isDeepSearch}
+                  onClick={() => setIsDeepSearch(!isDeepSearch)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors ${
+                    isDeepSearch ? "bg-blue-600" : "bg-gray-600"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      isDeepSearch ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </span>
+              </label>
             )}
 
             <button
