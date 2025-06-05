@@ -1358,6 +1358,20 @@ async def websocket_endpoint(websocket: WebSocket):
             
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+# Simplified chat pipeline over WebSocket
+from orchestrator import run as orchestrator_run
+
+@app.websocket("/ws/chat")
+async def chat_websocket(ws: WebSocket):
+    await ws.accept()
+    try:
+        init = await ws.receive_json()
+        query = init.get("query", "")
+        deep = init.get("deep", False)
+        await orchestrator_run(query, deep, ws)
+    except WebSocketDisconnect:
+        pass
         print("WebSocket client disconnected")
     except Exception as e:
         print(f"WebSocket error: {e}")
