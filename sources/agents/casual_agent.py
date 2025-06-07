@@ -31,7 +31,7 @@ class CasualAgent(Agent):
         if execution_manager:
             execution_manager.update_state({
                 "execution": {
-                    "agent_progress": {self.name: {"status": "completed", "output": answer}}
+                    "agent_progress": {self.agent_name: {"status": "completed", "output": answer}}
                 }
             })
 

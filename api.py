@@ -17,10 +17,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# Ensure the sources directory is in the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from sources.llm_provider import Provider
-from sources.agents import *
+from sources.agents import Agent, CoderAgent, CasualAgent, FileAgent, PlannerAgent, BrowserAgent, McpAgent
+# Import the new Enhanced agents
+from sources.agents.enhanced_search_agent import EnhancedSearchAgent
+from sources.agents.enhanced_web_agent import EnhancedWebAgent
+from sources.agents.enhanced_coding_agent import EnhancedCodingAgent
+from sources.agents.enhanced_analysis_agent import EnhancedAnalysisAgent
+from sources.agents.enhanced_report_agent import EnhancedReportAgent
+from sources.agents.quality_agent import QualityAgent
+
 from sources.orchestrator.task_orchestrator import TaskOrchestrator, ExecutionMode
 from sources.browser import create_driver, Browser
 from sources.utility import pretty_print
@@ -33,7 +42,7 @@ class OrchestratorQueryRequest(BaseModel):
     query: str
     execution_mode: str = "fast"
 
-app = FastAPI(title="Novah API - Final Corrected", version="5.0.0")
+app = FastAPI(title="Novah API", version="1.0.0")
 
 # --- CORS Middleware ---
 app.add_middleware(
@@ -73,11 +82,17 @@ class ExecutionManager:
     def initialize_agents(self):
         pretty_print("Initializing AI agents and services...", "status")
         try:
-            if not os.path.exists('config.ini'):
-                raise FileNotFoundError("config.ini not found. Please create it from config copy.ini")
-
+            config_path = 'config.ini'
+            if not os.path.exists(config_path):
+                # Fallback to config copy if original is missing
+                if os.path.exists('config copy.ini'):
+                    import shutil
+                    shutil.copy('config copy.ini', config_path)
+                else:
+                    raise FileNotFoundError("config.ini not found. Please create it from 'config copy.ini' or the example.")
+            
             config = configparser.ConfigParser()
-            config.read('config.ini')
+            config.read(config_path)
             
             provider = Provider(
                 provider_name=config.get("MAIN", "provider_name"),
@@ -89,7 +104,6 @@ class ExecutionManager:
             self.browser_driver = create_driver(headless=config.getboolean("BROWSER", "headless_browser"))
             browser_instance = Browser(self.browser_driver)
 
-            # *** CRITICAL FIX: Explicitly instantiate every agent with all required parameters ***
             agent_definitions = {
                 "EnhancedSearchAgent": {"prompt_path": "prompts/base/search_agent.txt"},
                 "EnhancedWebAgent": {"prompt_path": "prompts/base/browser_agent.txt", "browser": browser_instance},
@@ -101,9 +115,13 @@ class ExecutionManager:
                 "CasualAgent": {"prompt_path": "prompts/base/casual_agent.txt"},
                 "FileAgent": {"prompt_path": "prompts/base/file_agent.txt"}
             }
+            
+            # This makes all agent classes available to globals()
+            from sources import agents
 
             for name, params in agent_definitions.items():
-                agent_class = globals()[name]
+                # Use getattr to dynamically get the class from the agents module
+                agent_class = getattr(agents, name)
                 self.agents[name] = agent_class(
                     name=name,
                     provider=provider,
@@ -119,7 +137,6 @@ class ExecutionManager:
             traceback.print_exc()
             if self.browser_driver:
                 self.browser_driver.quit()
-            # We must exit, otherwise we run in a broken state
             sys.exit(1)
 
     def reset(self):
@@ -139,9 +156,14 @@ class ExecutionManager:
                 if isinstance(self.execution_state[key], dict) and isinstance(value, dict):
                     self.execution_state[key].update(value)
                 elif isinstance(self.execution_state[key], list) and isinstance(value, list):
+                    # This prevents duplicate entries in lists like screenshots
+                    current_list = self.execution_state[key]
                     for item in value:
-                        if item not in self.execution_state[key]:
-                             self.execution_state[key].append(item)
+                        if isinstance(item, dict) and 'id' in item:
+                             if not any(d.get('id') == item['id'] for d in current_list):
+                                current_list.append(item)
+                        elif item not in current_list:
+                             current_list.append(item)
                 else:
                     self.execution_state[key] = value
 
@@ -178,6 +200,7 @@ async def process_query(request: QueryRequest, background_tasks: BackgroundTasks
     if execution_manager.is_processing:
         raise HTTPException(status_code=429, detail="A task is already in progress.")
     execution_manager.reset()
+    # Simple queries now also run through the orchestrator in "fast" mode.
     background_tasks.add_task(run_orchestrated_task, request.query, "fast")
     return JSONResponse(status_code=202, content={"message": "Fast-track task started."})
 
@@ -193,4 +216,5 @@ def shutdown_event():
 
 if __name__ == "__main__":
     pretty_print("Starting Novah API server...", "status")
+    # Use port 8002 to match the new frontend's expectations
     uvicorn.run("api:app", host="0.0.0.0", port=8002, reload=True)

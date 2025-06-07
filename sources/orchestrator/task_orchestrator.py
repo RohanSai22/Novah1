@@ -6,6 +6,7 @@ This orchestrator manages dynamic task planning, agent routing, and intelligent 
 import asyncio
 import time
 import json
+import os
 from typing import Dict, List, Any
 from enum import Enum
 from dataclasses import dataclass, asdict
@@ -45,31 +46,20 @@ class TaskOrchestrator:
         self.logger = Logger("task_orchestrator.log")
 
     def _get_agent_key(self, agent_name: str) -> str:
+        from sources.agents import EnhancedSearchAgent, EnhancedWebAgent, EnhancedCodingAgent, FileAgent, CasualAgent, EnhancedReportAgent, QualityAgent, EnhancedAnalysisAgent, PlannerAgent
         agent_map = {
-            "web": "EnhancedWebAgent",
-            "search": "EnhancedSearchAgent",
-            "coder": "EnhancedCodingAgent",
-            "file": "FileAgent",
-            "casual": "CasualAgent",
-            "report": "EnhancedReportAgent",
-            "quality": "QualityAgent",
-            "analysis": "EnhancedAnalysisAgent",
-            "planner": "PlannerAgent"
+            "web": EnhancedWebAgent, "search": EnhancedSearchAgent, "coder": EnhancedCodingAgent,
+            "file": FileAgent, "casual": CasualAgent, "report": EnhancedReportAgent,
+            "quality": QualityAgent, "analysis": EnhancedAnalysisAgent, "planner": PlannerAgent
         }
         normalized_name = agent_name.lower().strip()
         
-        # Check direct mapping first
-        if normalized_name in agent_map:
-            return agent_map[normalized_name]
-
-        # Check for partial matches
-        for key, value in agent_map.items():
+        for key, agent_class in agent_map.items():
             if key in normalized_name:
-                return value
+                return agent_class.__name__
         
-        # Fallback and log a warning
         self.logger.warning(f"Could not find a specific agent for '{agent_name}'. Defaulting to CasualAgent.")
-        return "CasualAgent"
+        return CasualAgent.__name__
 
     async def create_execution_plan(self, query: str, mode: ExecutionMode) -> ExecutionPlan:
         planner = self.agents_registry.get("PlannerAgent")
