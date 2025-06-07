@@ -49,3 +49,64 @@ pypinyin
 requests
 reportlab
 uvicorn
+
+
+
+# /requirements.txt
+
+# --- Core Web Framework & Server ---
+fastapi
+uvicorn
+python-dotenv
+requests
+aiohttp
+
+# --- LLM & AI Providers ---
+openai
+ollama
+huggingface_hub
+together
+torch
+transformers
+sentencepiece
+
+# --- Agent Capabilities & Tools ---
+# Web Scraping & Automation
+beautifulsoup4
+selenium
+selenium-stealth
+undetected-chromedriver
+chromedriver-autoinstaller
+fake-useragent
+markdownify
+requests
+
+# Data Analysis & Visualization
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+wordcloud
+scikit-learn
+textstat
+networkx
+opencv-python
+
+# PDF & Document Handling
+reportlab
+Pillow
+
+# Language & Speech
+langid
+nltk
+soundfile
+pyaudio  # Note: May require system-level libraries (e.g., sudo apt-get install portaudio19-dev)
+librosa
+
+# General Utilities
+colorama
+termcolor
+jinja2
+certifi
+feedparser

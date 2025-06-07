@@ -14,6 +14,8 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import logging
 from pathlib import Path
+import re
+import os
 
 # Browser automation
 from selenium import webdriver
@@ -33,12 +35,14 @@ import numpy as np
 # Web content extraction
 from bs4 import BeautifulSoup
 import requests
-from readability import Document
+from readability.readability import Document
 
 from sources.utility import pretty_print, animate_thinking
-from sources.agents.agent import Agent
+from sources.agents.agent import Agent, ExecutionManager
 from sources.logger import Logger
 from sources.memory import Memory
+from sources.browser import Browser, create_driver
+from sources.tools.searxSearch import searxSearch
 
 class BrowserType(Enum):
     CHROME = "chrome"
@@ -107,11 +111,19 @@ class WebTask:
             self.wait_conditions = []
 
 class EnhancedWebAgent(Agent):
-    def __init__(self, name, prompt_path, provider, verbose=False, browser=None):
+    def __init__(self, name, prompt_path, provider, verbose=False, browser: Optional[Browser]=None):
         """
         Enhanced Web Agent with advanced browser automation and analysis
         """
         super().__init__(name, prompt_path, provider, verbose, browser)
+        self.role = "web"
+        self.type = "enhanced_web_agent"
+        if self.browser is None:
+            from sources.browser import create_driver
+            self.browser = Browser(create_driver(headless=True))
+        # This agent now has its own instance of the search tool
+        self.search_tool = searxSearch()
+
         self.tools = {
             "extract_web_content": self.extract_web_content,
             "take_screenshot": self.take_screenshot,
@@ -124,8 +136,6 @@ class EnhancedWebAgent(Agent):
             "extract_forms_data": self.extract_forms_data,
             "capture_network_activity": self.capture_network_activity,
         }
-        self.role = "enhanced_web"
-        self.type = "enhanced_web_agent"
         self.logger = Logger("enhanced_web_agent.log")
         self.memory = Memory(
             self.load_prompt(prompt_path),
@@ -970,98 +980,71 @@ class EnhancedWebAgent(Agent):
                 'url': url
             }
 
-    async def execute(self, task: str, additional_instructions: str = "") -> str:
+    async def process(self, prompt: str, execution_manager: 'ExecutionManager' = None, speech_module=None):
+        return await self.execute(prompt, execution_manager)
+
+    async def execute(self, prompt: str, execution_manager: Optional[ExecutionManager] = None) -> Dict[str, Any]:
         """
-        Execute a web extraction/analysis task
+        Main execution method for the web agent.
+        Parses the prompt to determine the URL and actions to take.
         """
+        self.logger.info(f"Executing web task with prompt: {prompt}")
+
         try:
-            self.logger.log(f"Executing enhanced web task: {task}")
-            
-            # Parse task to determine actions needed
-            task_lower = task.lower()
-            results = {}
-            
-            # Extract URL from task
-            import re
-            url_pattern = r'https?://[^\s]+'
-            urls = re.findall(url_pattern, task)
-            
-            if not urls:
-                return "No valid URL found in the task. Please provide a URL to analyze."
-            
-            url = urls[0]
-            
-            # Determine extraction mode based on task
-            extraction_mode = ExtractionMode.MAIN_CONTENT
-            if 'full page' in task_lower:
-                extraction_mode = ExtractionMode.FULL_PAGE
-            elif 'dynamic' in task_lower or 'javascript' in task_lower:
-                extraction_mode = ExtractionMode.DYNAMIC_CONTENT
-            
-            # Extract web content
-            content_result = await self.extract_web_content(url, extraction_mode)
-            results['content'] = content_result
-            
-            # Take screenshot if requested
-            if 'screenshot' in task_lower or 'image' in task_lower:
-                screenshot_result = await self.take_screenshot(url)
-                results['screenshot'] = screenshot_result
-                
-                # Analyze screenshot if taken
-                if screenshot_result.get('success') and screenshot_result.get('screenshot_path'):
-                    analysis_result = await self.analyze_screenshot(screenshot_result['screenshot_path'])
-                    results['screenshot_analysis'] = analysis_result
-            
-            # Performance analysis if requested
-            if 'performance' in task_lower or 'speed' in task_lower:
-                performance_result = await self.analyze_page_performance(url)
-                results['performance'] = performance_result
-            
-            # Forms analysis if requested
-            if 'form' in task_lower or 'input' in task_lower:
-                forms_result = await self.extract_forms_data(url)
-                results['forms'] = forms_result
-            
-            # Structured data if requested
-            if 'structured' in task_lower or 'schema' in task_lower or 'metadata' in task_lower:
-                structured_result = await self.extract_structured_data(url)
-                results['structured_data'] = structured_result
-            
-            # Generate comprehensive response
-            analysis_context = {
-                'task': task,
-                'url': url,
-                'results': results,
-                'timestamp': datetime.now().isoformat()
-            }
-            
-            messages = [
-                {"role": "system", "content": f"""You are an expert web content analyst. Analyze the web extraction results and provide insights.
-                
-Task: {task}
-URL: {url}
-Additional Instructions: {additional_instructions}
+            context = json.loads(prompt)
+            search_query = context.get('query', prompt)
+        except (json.JSONDecodeError, TypeError):
+            search_query = prompt
+        
+        url_match = re.search(r'https?://[^\s"\']+', search_query)
+        url = url_match.group(0) if url_match else None
 
-Provide a comprehensive analysis of the web content, including key findings, structure, and any notable elements."""},
-                {"role": "user", "content": f"Please analyze these web extraction results: {json.dumps(analysis_context, indent=2, default=str)}"}
-            ]
+        if not url:
+            self.logger.info("No URL in prompt, performing a search using the entire prompt.")
+            execution_manager.update_state({"execution": {"active_tool": "searxSearch"}})
             
-            response = self.provider.chat_completion(messages)
+            raw_search_results = self.search_tool.execute([search_query])
+            parsed_results = self.search_tool.parse_results(raw_search_results)
             
-            # Store in memory
-            self.memory.append_message("user", task)
-            self.memory.append_message("assistant", response)
-            
-            return response
-            
-        except Exception as e:
-            error_msg = f"Enhanced web execution failed: {str(e)}"
-            self.logger.log(error_msg)
-            return error_msg
-        finally:
-            # Clean up driver if needed
-            pass  # Keep driver alive for subsequent requests
+            if parsed_results and parsed_results[0].get("url"):
+                url = parsed_results[0]["url"]
+                self.logger.info(f"Found URL via search: {url}")
+                if execution_manager:
+                    execution_manager.update_state({"search": {"results": parsed_results}})
+            else:
+                return {"success": False, "summary": "Search did not yield a usable URL."}
 
+        if not url:
+             return {"success": False, "summary": "Could not find or determine a URL to browse."}
+
+        if execution_manager:
+            execution_manager.update_state({"browser": {"current_url": url}})
+        
+        nav_success = self.browser.go_to(url)
+        if not nav_success:
+            return {"success": False, "summary": f"Failed to navigate to {url}."}
+
+        sanitized_filename = re.sub(r'[^a-zA-Z0-9]', '_', url)[:100] + ".png"
+        screenshot_path = self.browser.screenshot(sanitized_filename)
+        page_content = self.browser.get_text()
+
+        if execution_manager and screenshot_path:
+            web_accessible_path = os.path.join('/screenshots', os.path.basename(screenshot_path)).replace('\\', '/')
+            current_screenshots = execution_manager.execution_state.get('browser', {}).get('screenshots', [])
+            if web_accessible_path not in current_screenshots:
+                current_screenshots.append(web_accessible_path)
+            
+            current_links = execution_manager.execution_state.get('browser', {}).get('links_processed', [])
+            if url not in current_links:
+                current_links.append(url)
+            
+            execution_manager.update_state({
+                "browser": {"screenshots": current_screenshots, "links_processed": current_links}
+            })
+        
+        summary = f"Successfully browsed to {url} and extracted its content. The information has been passed to the next agent for analysis."
+        return {"success": True, "summary": summary, "url": url, "content": page_content, "screenshot": screenshot_path}
+    
     def __del__(self):
         """Cleanup when agent is destroyed"""
         self.close_driver()

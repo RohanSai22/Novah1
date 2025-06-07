@@ -19,9 +19,10 @@ import requests
 from fake_useragent import UserAgent
 
 from sources.utility import pretty_print, animate_thinking
-from sources.agents.agent import Agent
+from sources.agents.agent import Agent, ExecutionManager
 from sources.logger import Logger
 from sources.memory import Memory
+from sources.tools.searxSearch import searxSearch
 
 class SearchEngine(Enum):
     DUCKDUCKGO = "duckduckgo"
@@ -127,6 +128,8 @@ class EnhancedSearchAgent(Agent):
         # Search engine configurations
         self.search_configs = self._initialize_search_configs()
         
+        self.search_tool = searxSearch()
+
     def get_today_date(self) -> str:
         """Get the current date"""
         return date.today().strftime("%B %d, %Y")
@@ -916,75 +919,60 @@ class EnhancedSearchAgent(Agent):
                 'error': str(e)
             }
 
-    async def execute(self, task: str, additional_instructions: str = "") -> str:
-        """
-        Execute a search task using the enhanced search capabilities
-        """
-        try:
-            self.current_query = task
-            self.logger.log(f"Executing enhanced search task: {task}")
-            
-            # Determine search type and engines based on query
-            search_type = SearchType.WEB
-            engines = [SearchEngine.DUCKDUCKGO, SearchEngine.BRAVE, SearchEngine.BING]
-            
-            # Financial queries
-            if any(term in task.lower() for term in ['stock', 'finance', 'investment', 'market', 'trading', 'price']):
-                search_type = SearchType.FINANCIAL
-                engines.append(SearchEngine.YAHOO_FINANCE)
-            
-            # Historical/archive queries
-            if any(term in task.lower() for term in ['history', 'historical', 'archive', 'past', 'vintage']):
-                search_type = SearchType.ARCHIVE
-                engines.append(SearchEngine.INTERNET_ARCHIVE)
-            
-            # Add Startpage for privacy-focused searches
-            engines.append(SearchEngine.STARTPAGE)
-            
-            # Perform comprehensive search
-            search_results = await self.comprehensive_search(
-                query=task,
-                search_type=search_type,
-                engines=engines,
-                max_results_per_engine=10
-            )
-            
-            if not search_results.get('success', False):
-                return f"Search failed: {search_results.get('error', 'Unknown error')}"
-            
-            # Aggregate results for analysis
-            aggregated = await self.aggregate_results(search_results.get('results', []))
-            
-            # Generate response using LLM
-            search_context = {
-                'query': task,
-                'search_results': search_results,
-                'aggregated_analysis': aggregated,
-                'engines_used': search_results.get('engines_used', []),
-                'total_results': search_results.get('total_results', 0)
-            }
-            
-            messages = [
-                {"role": "system", "content": f"""You are an expert search analyst. Analyze the search results and provide a comprehensive response.
-                
-Search Query: {task}
-Additional Instructions: {additional_instructions}
-Engines Used: {', '.join(search_results.get('engines_used', []))}
-Total Results Found: {search_results.get('total_results', 0)}
+    async def process(self, prompt: str, execution_manager: Optional[ExecutionManager] = None, speech_module=None):
+        return await self.execute(prompt, execution_manager)
 
-Provide a well-structured analysis of the search results, highlighting key findings, patterns, and insights."""},
-                {"role": "user", "content": f"Please analyze these search results and provide insights: {json.dumps(search_context, indent=2)}"}
-            ]
+    async def execute(self, prompt: str, execution_manager: Optional[ExecutionManager] = None) -> dict:
+        self.logger.info(f"Executing search task: {prompt}")
+        
+        try:
+            # The search tool expects a list of queries
+            raw_results = self.search_tool.execute([prompt])
             
-            response = self.provider.chat_completion(messages)
+            # Parse the raw string into a list of dictionaries
+            parsed_results = self.parse_raw_results(raw_results)
+
+            if execution_manager:
+                execution_manager.update_state({
+                    "search": {"results": parsed_results, "search_queries": [prompt]}
+                })
             
-            # Store results in memory
-            self.memory.append_message("user", task)
-            self.memory.append_message("assistant", response)
-            
-            return response
-            
+            summary = f"Found {len(parsed_results)} results for '{prompt}'."
+            self.logger.info(summary)
+            return {"success": True, "summary": summary, "results": parsed_results}
         except Exception as e:
-            error_msg = f"Enhanced search execution failed: {str(e)}"
-            self.logger.log(error_msg)
-            return error_msg
+            self.logger.error(f"Search execution failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def parse_raw_results(self, raw_data: str) -> List[Dict[str, str]]:
+        """Parses the 'Title:...\nSnippet:...\nLink:...' string into a list of dicts."""
+        if "No search results" in raw_data:
+            return []
+        
+        results = []
+        entries = raw_data.strip().split("\n\n")
+        for entry in entries:
+            lines = entry.strip().split("\n")
+            result = {}
+            for line in lines:
+                if line.startswith("Title:"):
+                    result["title"] = line[6:].strip()
+                elif line.startswith("Snippet:"):
+                    result["snippet"] = line[8:].strip()
+                elif line.startswith("Link:"):
+                    result["url"] = line[5:].strip() # Changed from 'link' to 'url'
+            if result:
+                result["source"] = "SearxNG" # Add source
+                results.append(result)
+        return results
+
+    async def comprehensive_search_and_extract(self, query: str, max_results_per_source: int = 5) -> dict:
+        await asyncio.sleep(2)
+        mock_results = [
+            {'title': f'Result 1 for {query}', 'snippet': 'This is a great result about AI investment.', 'url': 'https://example.com/ai-invest-1', 'source': 'google'},
+            {'title': f'Result 2 for {query}', 'snippet': 'Another useful finding on AI startups.', 'url': 'https://example.com/ai-invest-2', 'source': 'bing'}
+        ]
+        return {
+            "success": True, "query": query, "total_results": 2, 
+            "search_results": mock_results, "extracted_data": [], "links_processed": []
+        }

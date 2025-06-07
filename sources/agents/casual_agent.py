@@ -1,11 +1,8 @@
 import asyncio
+from typing import Optional, Tuple
 
 from sources.utility import pretty_print, animate_thinking
-from sources.agents.agent import Agent
-from sources.tools.searxSearch import searxSearch
-from sources.tools.flightSearch import FlightSearch
-from sources.tools.fileFinder import FileFinder
-from sources.tools.BashInterpreter import BashInterpreter
+from sources.agents.agent import Agent, ExecutionManager
 from sources.memory import Memory
 
 class CasualAgent(Agent):
@@ -13,9 +10,7 @@ class CasualAgent(Agent):
         """
         The casual agent is a special for casual talk to the user without specific tasks.
         """
-        super().__init__(name, prompt_path, provider, verbose, None)
-        self.tools = {
-        } # No tools for the casual agent
+        super().__init__(name, prompt_path, provider, verbose)
         self.role = "talk"
         self.type = "casual_agent"
         self.memory = Memory(self.load_prompt(prompt_path),
@@ -23,13 +18,29 @@ class CasualAgent(Agent):
                                 memory_compression=False,
                                 model_provider=provider.get_model_name())
     
-    async def process(self, prompt, speech_module) -> str:
+    async def process(self, prompt: str, execution_manager: Optional[ExecutionManager] = None, speech_module=None) -> Tuple[str, str]:
+        return await self.execute(prompt, execution_manager)
+        
+    async def execute(self, prompt: str, execution_manager: Optional[ExecutionManager] = None) -> dict:
         self.memory.push('user', prompt)
         animate_thinking("Thinking...", color="status")
         answer, reasoning = await self.llm_request()
         self.last_answer = answer
         self.status_message = "Ready"
-        return answer, reasoning
+
+        if execution_manager:
+            execution_manager.update_state({
+                "execution": {
+                    "agent_progress": {self.name: {"status": "completed", "output": answer}}
+                }
+            })
+
+        return {
+            "success": True,
+            "summary": "Responded to user query.",
+            "answer": answer,
+            "reasoning": reasoning
+        }
 
 if __name__ == "__main__":
     pass

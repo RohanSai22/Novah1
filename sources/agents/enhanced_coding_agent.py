@@ -35,7 +35,7 @@ import inspect
 from jinja2 import Template
 
 from sources.utility import pretty_print, animate_thinking
-from sources.agents.agent import Agent
+from sources.agents.agent import Agent, ExecutionManager
 from sources.logger import Logger
 from sources.memory import Memory
 
@@ -1313,117 +1313,32 @@ Be thorough in your analysis and provide clear explanations."""},
                 'error': str(e)
             }
 
-    async def execute(self, task: str, additional_instructions: str = "") -> str:
-        """
-        Execute a coding task
-        """
+    async def execute(self, prompt: str, execution_manager: Optional[ExecutionManager] = None) -> dict:
+        self.logger.info(f"Executing coding task: {prompt}")
+
         try:
-            self.logger.log(f"Executing coding task: {task}")
+            # Use LLM to generate the code first
+            code_generation_result = await self.generate_code(prompt, CodeLanguage.PYTHON)
+            if not code_generation_result['success']:
+                return code_generation_result
+
+            generated_code = code_generation_result['generated_code']
             
-            # Analyze task to determine what needs to be done
-            task_lower = task.lower()
-            results = {}
-            
-            # Determine task type
-            if any(keyword in task_lower for keyword in ['generate', 'create', 'write', 'build']):
-                if 'visualization' in task_lower or 'chart' in task_lower or 'plot' in task_lower:
-                    # Visualization generation task
-                    code_result = await self.generate_code(
-                        task, 
-                        CodeLanguage.PYTHON, 
-                        template_type="data_analysis",
-                        additional_requirements=additional_instructions
-                    )
-                    results['code_generation'] = code_result
-                    
-                    if code_result.get('success'):
-                        # Execute the generated code
-                        exec_result = await self.execute_code(code_result['generated_code'])
-                        results['execution'] = exec_result
-                
-                elif 'dashboard' in task_lower:
-                    # Dashboard creation task
-                    code_result = await self.generate_code(
-                        task,
-                        CodeLanguage.PYTHON,
-                        additional_requirements=f"Create an interactive dashboard. {additional_instructions}"
-                    )
-                    results['dashboard_code'] = code_result
-                
-                else:
-                    # General code generation
-                    language = CodeLanguage.PYTHON  # Default
-                    if 'javascript' in task_lower or 'js' in task_lower:
-                        language = CodeLanguage.JAVASCRIPT
-                    elif 'typescript' in task_lower or 'ts' in task_lower:
-                        language = CodeLanguage.TYPESCRIPT
-                    
-                    code_result = await self.generate_code(task, language, additional_requirements=additional_instructions)
-                    results['code_generation'] = code_result
-            
-            elif any(keyword in task_lower for keyword in ['analyze', 'analysis', 'explore']):
-                # Data analysis task
-                if 'data' in task_lower:
-                    # Need to extract data source from task or use sample data
-                    analysis_result = await self.analyze_data(DataAnalysisRequest(
-                        data={'sample': [1, 2, 3, 4, 5]},  # Placeholder
-                        analysis_type="exploratory",
-                        visualization_types=[VisualizationType.HISTOGRAM, VisualizationType.BAR_CHART]
-                    ))
-                    results['data_analysis'] = analysis_result
-            
-            elif any(keyword in task_lower for keyword in ['execute', 'run']):
-                # Code execution task - need to extract code from task
-                if '```' in task:
-                    # Extract code from markdown code blocks
-                    import re
-                    code_blocks = re.findall(r'```(?:python|py)?\n(.*?)\n```', task, re.DOTALL)
-                    if code_blocks:
-                        exec_result = await self.execute_code(code_blocks[0])
-                        results['execution'] = exec_result
-            
-            elif any(keyword in task_lower for keyword in ['debug', 'fix', 'error']):
-                # Debugging task
-                if '```' in task and 'error' in task_lower:
-                    # Extract code and error from task
-                    import re
-                    code_blocks = re.findall(r'```(?:python|py)?\n(.*?)\n```', task, re.DOTALL)
-                    if code_blocks:
-                        # Extract error message
-                        error_pattern = r'error[:\s]*(.*?)(?:\n|$)'
-                        error_matches = re.findall(error_pattern, task, re.IGNORECASE)
-                        error_msg = error_matches[0] if error_matches else "Unknown error"
-                        
-                        debug_result = await self.debug_code(code_blocks[0], error_msg)
-                        results['debugging'] = debug_result
-            
-            # Generate comprehensive response
-            context = {
-                'task': task,
-                'additional_instructions': additional_instructions,
-                'results': results,
-                'timestamp': datetime.now().isoformat()
+            # Now, execute the generated code
+            execution_result = await self.execute_code(generated_code)
+
+            if execution_manager:
+                current_executions = execution_manager.execution_state['coding'].get('executions', [])
+                current_executions.append(execution_result)
+                execution_manager.update_state({"coding": {"executions": current_executions}})
+
+            return {
+                "success": execution_result['success'],
+                "summary": f"Generated and executed code for task: {prompt}",
+                "code": generated_code,
+                "output": execution_result.get('output', ''),
+                "error": execution_result.get('error', '')
             }
-            
-            messages = [
-                {"role": "system", "content": f"""You are an expert coding assistant and data analyst. Analyze the coding task results and provide comprehensive insights.
-
-Task: {task}
-Additional Instructions: {additional_instructions}
-
-Provide a detailed analysis of the results, explain what was accomplished, and offer suggestions for improvement or next steps."""},
-                {"role": "user", "content": f"Please analyze these coding task results: {json.dumps(context, indent=2, default=str)}"}
-            ]
-            
-            response = self.provider.chat_completion(messages)
-            
-            # Store in memory
-            self.memory.append_message("user", task)
-            self.memory.append_message("assistant", response)
-            
-            return response
-            
         except Exception as e:
-            error_msg = f"Coding task execution failed: {str(e)}"
-            self.logger.log(error_msg)
-            return error_msg
+            self.logger.error(f"Coding task failed: {e}")
+            return {"success": False, "error": str(e)}

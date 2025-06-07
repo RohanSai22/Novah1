@@ -1,501 +1,96 @@
 import json
-from typing import List, Tuple, Type, Dict
+import re
+from typing import List, Tuple, Dict, Optional
 from sources.utility import pretty_print, animate_thinking
 from sources.agents.agent import Agent
-from sources.agents.code_agent import CoderAgent
-from sources.agents.file_agent import FileAgent
-from sources.agents.browser_agent import BrowserAgent
-from sources.agents.casual_agent import CasualAgent
-from sources.agents.report_agent import ReportAgent
-from sources.text_to_speech import Speech
-from sources.tools.tools import Tools
 from sources.logger import Logger
 from sources.memory import Memory
 
 class PlannerAgent(Agent):
-    def __init__(self, name, prompt_path, provider, verbose=False, browser=None):
-        """
-        The planner agent is a special agent that divides and conquers the task.
-        """
-        super().__init__(name, prompt_path, provider, verbose, None)
-        self.tools = {
-            "json": Tools()
-        }
-        self.tools['json'].tag = "json"
-        self.browser = browser
-        self.agents = {
-            "coder": CoderAgent(name, "prompts/base/coder_agent.txt", provider, verbose=False),
-            "file": FileAgent(name, "prompts/base/file_agent.txt", provider, verbose=False),
-            "web": BrowserAgent(name, "prompts/base/browser_agent.txt", provider, verbose=False, browser=browser),
-            "casual": CasualAgent(name, "prompts/base/casual_agent.txt", provider, verbose=False)
-        }
+    def __init__(self, name: str, prompt_path: str, provider, verbose: bool = False, browser=None):
+        super().__init__(name, prompt_path, provider, verbose, browser)
         self.role = "planification"
         self.type = "planner_agent"
-        self.memory = Memory(self.load_prompt(prompt_path),
-                                recover_last_session=False, # session recovery in handled by the interaction class
-                                memory_compression=False,
-                                model_provider=provider.get_model_name())
+        self.memory = Memory(self.load_prompt(prompt_path), recover_last_session=False, memory_compression=False, model_provider=provider.get_model_name())
         self.logger = Logger("planner_agent.log")
-        self.current_plan = []
-        self.execution_state = {
-            "intent": "",
-            "plan": [],
-            "current_subtask": 0,
-            "subtask_status": [],
-            "agent_outputs": {},
-            "final_report_url": None,
-            "status": "idle",
-            "error": None
-        }
-    
-    def get_task_names(self, text: str) -> List[str]:
-        """
-        Extracts task names from the given text.
-        This method processes a multi-line string, where each line may represent a task name.
-        containing '##' or starting with a digit. The valid task names are collected and returned.
-        Args:
-            text (str): A string containing potential task titles (eg: Task 1: I will...).
-        Returns:
-            List[str]: A list of extracted task names that meet the specified criteria.
-        """
-        tasks_names = []
-        lines = text.strip().split('\n')
-        for line in lines:
-            if line is None:
-                continue
-            line = line.strip()
-            if len(line) == 0:
-                continue
-            if '##' in line or line[0].isdigit():
-                tasks_names.append(line)
-                continue
-        self.logger.info(f"Found {len(tasks_names)} tasks names.")
-        return tasks_names
 
-    def parse_agent_tasks(self, text: str) -> List[Tuple[str, str]]:
-        """
-        Parses agent tasks from the given LLM text.
-        This method extracts task information from a JSON. It identifies task names and their details.
-        Args:
-            text (str): The input text containing task information in a JSON-like format.
-        Returns:
-            List[Tuple[str, str]]: A list of tuples containing task names and their details.
-        """
-        tasks = []
-        tasks_names = self.get_task_names(text)
+    async def execute(self, prompt: str, execution_manager: Optional['ExecutionManager'] = None):
+        """Main entry point for the planner agent."""
+        return await self.make_plan(prompt)
 
-        blocks, _ = self.tools["json"].load_exec_block(text)
-        if blocks == None:
+    def _extract_json_from_text(self, text: str) -> Optional[Dict]:
+        """Extracts the first valid JSON object from a string."""
+        # Find the first occurrence of '{' and the last '}'
+        start_index = text.find('{')
+        end_index = text.rfind('}')
+        
+        if start_index == -1 or end_index == -1:
+            return None
+            
+        json_str = text[start_index : end_index + 1]
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            # Fallback for malformed JSON, like missing closing brackets
+            self.logger.warning(f"Failed to parse JSON, attempting to fix: {json_str[:200]}...")
+            try:
+                # A common issue is trailing commas, which we can try to fix
+                fixed_json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+                return json.loads(fixed_json_str)
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Could not parse JSON even after attempting to fix: {e}")
+                return None
+
+    def parse_agent_tasks(self, text: str) -> List[Tuple[str, Dict]]:
+        """Parses agent tasks from the LLM text, now with robust JSON extraction."""
+        json_data = self._extract_json_from_text(text)
+        if not json_data or 'plan' not in json_data or not isinstance(json_data['plan'], list):
+            self.logger.error("Failed to find a valid 'plan' list in the LLM response.")
             return []
-        for block in blocks:
-            line_json = json.loads(block)
-            if 'plan' in line_json:
-                for task in line_json['plan']:
-                    if task['agent'].lower() not in [ag_name.lower() for ag_name in self.agents.keys()]:
-                        self.logger.warning(f"Agent {task['agent']} does not exist.")
-                        pretty_print(f"Agent {task['agent']} does not exist.", color="warning")
-                        return []
-                    try:
-                        agent = {
-                            'agent': task['agent'],
-                            'id': task['id'],
-                            'task': task['task']
-                        }
-                    except:
-                        self.logger.warning("Missing field in json plan.")
-                        return []
-                    self.logger.info(f"Created agent {task['agent']} with task: {task['task']}")
-                    if 'need' in task:
-                        self.logger.info(f"Agent {task['agent']} was given info:\n {task['need']}")
-                        agent['need'] = task['need']
-                    tasks.append(agent)
-        if len(tasks_names) != len(tasks):
-            names = [task['task'] for task in tasks]
-            return list(map(list, zip(names, tasks)))
-        return list(map(list, zip(tasks_names, tasks)))
-    
-    def make_prompt(self, task: str, agent_infos_dict: dict) -> str:
-        """
-        Generates a prompt for the agent based on the task and previous agents work information.
-        Args:
-            task (str): The task to be performed.
-            agent_infos_dict (dict): A dictionary containing information from other agents.
-        Returns:
-            str: The formatted prompt for the agent.
-        """
-        infos = ""
-        if agent_infos_dict is None or len(agent_infos_dict) == 0:
-            infos = "No needed informations."
-        else:
-            for agent_id, info in agent_infos_dict.items():
-                infos += f"\t- According to agent {agent_id}:\n{info}\n\n"
-        prompt = f"""
-        You are given informations from your AI friends work:
-        {infos}
-        Your task is:
-        {task}
-        """
-        self.logger.info(f"Prompt for agent:\n{prompt}")
-        return prompt
-    
-    def show_plan(self, agents_tasks: List[dict], answer: str) -> None:
-        """
-        Displays the plan made by the agent.
-        Args:
-            agents_tasks (dict): The tasks assigned to each agent.
-            answer (str): The answer from the LLM.
-        """
-        if agents_tasks == []:
-            pretty_print(answer, color="warning")
-            pretty_print("Failed to make a plan. This can happen with (too) small LLM. Clarify your request and insist on it making a plan within ```json.", color="failure")
+
+        tasks = []
+        for i, task_data in enumerate(json_data['plan']):
+            if not isinstance(task_data, dict) or 'agent' not in task_data or 'task' not in task_data:
+                self.logger.warning(f"Skipping malformed task item: {task_data}")
+                continue
+            
+            # The "task name" is just the task description itself
+            task_name = task_data['task']
+            tasks.append((task_name, task_data))
+        
+        return tasks
+
+    def show_plan(self, agents_tasks: List[Tuple[str, Dict]]):
+        """Displays the plan made by the agent."""
+        if not agents_tasks:
+            pretty_print("Failed to generate a valid plan. The LLM response might be malformed.", "failure")
             return
+        
         pretty_print("\n▂▘ P L A N ▝▂", color="status")
-        for task_name, task in agents_tasks:
-            pretty_print(f"{task['agent']} -> {task['task']}", color="info")
+        for task_name, task_details in agents_tasks:
+            pretty_print(f"Agent: {task_details['agent']} ➞ Task: {task_name}", color="info")
         pretty_print("▔▗ E N D ▖▔", color="status")
 
-    async def make_plan(self, prompt: str) -> str:
-        """
-        Asks the LLM to make a plan.
-        Args:
-            prompt (str): The prompt to be sent to the LLM.
-        Returns:
-            str: The plan made by the LLM.
-        """
-        ok = False
-        answer = None
-        while not ok:
+    async def make_plan(self, prompt: str) -> List[Tuple[str, Dict]]:
+        """Asks the LLM to make a plan and robustly parses it."""
+        self.memory.clear() # Start with a fresh memory for each plan
+        self.memory.push('user', prompt)
+        
+        for attempt in range(2): # Allow one retry
             animate_thinking("Thinking...", color="status")
-            self.memory.push('user', prompt)
             answer, reasoning = await self.llm_request()
-            if "NO_UPDATE" in answer:
-                return []
+            
             agents_tasks = self.parse_agent_tasks(answer)
-            if agents_tasks == []:
-                self.show_plan(agents_tasks, answer)
-                prompt = f"Failed to parse the tasks. Please write down your task followed by a json plan within ```json. Do not ask for clarification.\n"
-                pretty_print("Failed to make plan. Retrying...", color="warning")
-                continue
-            self.show_plan(agents_tasks, answer)
-            self.current_plan = agents_tasks
-            ok = True
-        self.logger.info(f"Plan made:\n{answer}")
-        return self.parse_agent_tasks(answer)
+            
+            if agents_tasks:
+                self.show_plan(agents_tasks)
+                self.logger.info(f"Plan made:\n{answer}")
+                return agents_tasks
+            else:
+                pretty_print(f"Failed to parse plan on attempt {attempt + 1}. Retrying...", "warning")
+                self.memory.push('assistant', answer) # Add failed answer to context
+                self.memory.push('user', "That was not a valid JSON plan. Please provide the plan again, ensuring it is a valid JSON array inside a 'plan' key, like ```json{\"plan\":[...]} ```")
 
-    async def make_plan_v2(self, prompt: str):
-        """
-        Create a structured plan with subtasks in the required format.
-        Args:
-            prompt (str): The user's request
-        Returns:
-            List[dict]: Structured plan with tasks and subtasks
-        """
-        # First, get the intent summary
-        self.execution_state["intent"] = prompt.strip()
-        self.execution_state["status"] = "planning"
-        
-        plans = await self.make_plan(prompt)
-        formatted = []
-        
-        for i, (task_name, task) in enumerate(plans):
-            # Convert old format to new structured format
-            subtasks = []
-            if isinstance(task, dict):
-                # Break down the main task into subtasks
-                main_task = task.get('task', task_name)
-                agent_type = task.get('agent', 'casual').lower()
-                
-                # Create meaningful subtasks based on agent type
-                if agent_type == 'web':
-                    subtasks = [
-                        f"Search for: {main_task}",
-                        f"Extract relevant information",
-                        f"Summarize findings"
-                    ]
-                elif agent_type == 'coder':
-                    subtasks = [
-                        f"Plan code structure",
-                        f"Implement: {main_task}",
-                        f"Test and debug"
-                    ]
-                elif agent_type == 'file':
-                    subtasks = [
-                        f"Locate files",
-                        f"Process: {main_task}",
-                        f"Organize results"
-                    ]
-                else:
-                    subtasks = [main_task]
-            
-            formatted_task = {
-                "task": task_name,
-                "tool": task.get('agent', 'CasualAgent') if isinstance(task, dict) else 'CasualAgent',
-                "subtasks": subtasks,
-                "status": "pending"
-            }
-            formatted.append(formatted_task)
-            
-            # Initialize subtask status
-            for subtask in subtasks:
-                self.execution_state["subtask_status"].append({
-                    "task_id": i,
-                    "subtask": subtask,
-                    "status": "pending",
-                    "agent": formatted_task["tool"],
-                    "output": ""
-                })
-        
-        self.execution_state["plan"] = formatted
-        return formatted
-    
-    def update_subtask_status(self, task_id: int, subtask_index: int, status: str, output: str = ""):
-        """
-        Update the status of a specific subtask.
-        Args:
-            task_id (int): The task ID
-            subtask_index (int): The subtask index
-            status (str): New status (pending, running, completed, failed)
-            output (str): Output from the agent
-        """
-        for subtask_status in self.execution_state["subtask_status"]:
-            if (subtask_status["task_id"] == task_id and 
-                subtask_status["subtask"].split()[0] == 
-                self.execution_state["plan"][task_id]["subtasks"][subtask_index].split()[0]):
-                subtask_status["status"] = status
-                if output:
-                    subtask_status["output"] = output
-                break
-        
-        # Update overall task status
-        if task_id < len(self.execution_state["plan"]):
-            task_subtasks = [s for s in self.execution_state["subtask_status"] if s["task_id"] == task_id]
-            if all(s["status"] == "completed" for s in task_subtasks):
-                self.execution_state["plan"][task_id]["status"] = "completed"
-            elif any(s["status"] == "failed" for s in task_subtasks):
-                self.execution_state["plan"][task_id]["status"] = "failed"
-            elif any(s["status"] == "running" for s in task_subtasks):
-                self.execution_state["plan"][task_id]["status"] = "running"
-    
-    def get_execution_state(self):
-        """Get the current execution state for API responses."""
-        return self.execution_state
-    
-    async def update_plan(self, goal: str, agents_tasks: List[dict], agents_work_result: dict, id: str, success: bool) -> dict:
-        """
-        Updates the plan with the results of the agents work.
-        Args:
-            goal (str): The goal to be achieved.
-            agents_tasks (list): The tasks assigned to each agent.
-            agents_work_result (dict): The results of the agents work.
-        Returns:
-            dict: The updated plan.
-        """
-        self.status_message = "Updating plan..."
-        last_agent_work = agents_work_result[id]
-        tool_success_str = "success" if success else "failure"
-        pretty_print(f"Agent {id} work {tool_success_str}.", color="success" if success else "failure")
-        try:
-            id_int = int(id)
-        except Exception as e:
-            return agents_tasks
-        if id_int == len(agents_tasks):
-            next_task = "No task follow, this was the last step. If it failed add a task to recover."
-        else:
-            next_task = f"Next task is: {agents_tasks[int(id)][0]}."
-        #if success:
-        #    return agents_tasks # we only update the plan if last task failed, for now
-        update_prompt = f"""
-        Your goal is : {goal}
-        You previously made a plan, agents are currently working on it.
-        The last agent working on task: {id}, did the following work:
-        {last_agent_work}
-        Agent {id} work was a {tool_success_str} according to system interpreter.
-        {next_task}
-        Is the work done for task {id} leading to sucess or failure ? Did an agent fail with a task?
-        If agent work was good: answer "NO_UPDATE"
-        If agent work is leading to failure: update the plan.
-        If a task failed add a task to try again or recover from failure. You might have near identical task twice.
-        plan should be within ```json like before.
-        You need to rewrite the whole plan, but only change the tasks after task {id}.
-        Make the plan the same length as the original one or with only one additional step.
-        Do not change past tasks. Change next tasks.
-        """
-        pretty_print("Updating plan...", color="status")
-        plan = await self.make_plan(update_prompt)
-        if plan == []:
-            pretty_print("No plan update required.", color="info")
-            return agents_tasks
-        self.logger.info(f"Plan updated:\n{plan}")
-        return plan
-    
-    async def start_agent_process(self, task: dict, required_infos: dict | None) -> str:
-        """
-        Starts the agent process for a given task.
-        Args:
-            task (dict): The task to be performed.
-            required_infos (dict | None): The required information for the task.
-        Returns:
-            str: The result of the agent process.
-        """
-        self.status_message = f"Starting task {task['task']}..."
-        agent_prompt = self.make_prompt(task['task'], required_infos)
-        pretty_print(f"Agent {task['agent']} started working...", color="status")
-        self.logger.info(f"Agent {task['agent']} started working on {task['task']}.")
-        answer, reasoning = await self.agents[task['agent'].lower()].process(agent_prompt, None)
-        self.last_answer = answer
-        self.last_reasoning = reasoning
-        self.blocks_result = self.agents[task['agent'].lower()].blocks_result
-        agent_answer = self.agents[task['agent'].lower()].raw_answer_blocks(answer)
-        success = self.agents[task['agent'].lower()].get_success
-        self.agents[task['agent'].lower()].show_answer()
-        pretty_print(f"Agent {task['agent']} completed task.", color="status")
-        self.logger.info(f"Agent {task['agent']} finished working on {task['task']}. Success: {success}")
-        agent_answer += "\nAgent succeeded with task." if success else "\nAgent failed with task (Error detected)."
-        return agent_answer, success
-    
-    def get_work_result_agent(self, task_needs, agents_work_result):
-        res = {k: agents_work_result[k] for k in task_needs if k in agents_work_result}
-        self.logger.info(f"Next agent needs: {task_needs}.\n Match previous agent result: {res}")
-        return res
-
-    async def process(self, goal: str, speech_module: Speech) -> Tuple[str, str]:
-        """
-        Process the goal by dividing it into tasks and assigning them to agents.
-        Args:
-            goal (str): The goal to be achieved (user prompt).
-            speech_module (Speech): The speech module for text-to-speech.
-        Returns:
-            Tuple[str, str]: The result of the agent process and empty reasoning string.
-        """
-        agents_tasks = []
-        required_infos = None
-        agents_work_result = dict()
-        final_summary = []
-
-        self.status_message = "Making a plan..."
-        self.execution_state["status"] = "planning"
-        
-        # Create structured plan
-        structured_plan = await self.make_plan_v2(goal)
-        
-        if not structured_plan:
-            self.execution_state["status"] = "failed"
-            self.execution_state["error"] = "Failed to create plan"
-            return "Failed to parse the tasks.", ""
-        
-        self.execution_state["status"] = "executing"
-        agents_tasks = await self.make_plan(goal)  # Get original format for execution
-
-        if agents_tasks == []:
-            return "Failed to parse the tasks.", ""
-
-        i = 0
-        steps = len(agents_tasks)
-        while i < steps and not self.stop:
-            task_name, task = agents_tasks[i][0], agents_tasks[i][1]
-            self.status_message = "Starting agents..."
-            
-            # Update subtask status to running
-            if i < len(structured_plan):
-                for j, subtask in enumerate(structured_plan[i]["subtasks"]):
-                    self.update_subtask_status(i, j, "running")
-            
-            pretty_print(f"I will {task_name}.", color="info")
-            self.last_answer = f"I will {task_name.lower()}."
-            pretty_print(f"Assigned agent {task['agent']} to {task_name}", color="info")
-            if speech_module: 
-                speech_module.speak(f"I will {task_name}. I assigned the {task['agent']} agent to the task.")
-
-            if agents_work_result is not None:
-                required_infos = self.get_work_result_agent(task['need'], agents_work_result)
-            
-            try:
-                answer, success = await self.start_agent_process(task, required_infos)
-                final_summary.append(f"Task {i+1}: {task_name}\nResult: {answer}\n")
-                
-                # Update subtask status
-                if i < len(structured_plan):
-                    for j, subtask in enumerate(structured_plan[i]["subtasks"]):
-                        status = "completed" if success else "failed"
-                        self.update_subtask_status(i, j, status, answer)
-                
-            except Exception as e:
-                # Mark subtasks as failed
-                if i < len(structured_plan):
-                    for j, subtask in enumerate(structured_plan[i]["subtasks"]):
-                        self.update_subtask_status(i, j, "failed", str(e))
-                raise e
-                
-            if self.stop:
-                pretty_print(f"Requested stop.", color="failure")
-                self.execution_state["status"] = "stopped"
-                break
-                
-            agents_work_result[task['id']] = answer
-            agents_tasks = await self.update_plan(goal, agents_tasks, agents_work_result, task['id'], success)
-            steps = len(agents_tasks)
-            i += 1
-
-        # Generate final comprehensive summary
-        summary = "\n\n=== Final Research Summary ===\n"
-        summary += "\n".join(final_summary)
-        summary += f"\n\nOverall Goal: {goal}\n"
-        summary += "=== End of Summary ===\n"
-        
-        # Generate comprehensive report using ReportAgent
-        self.execution_state["status"] = "generating_report"
-        try:
-            # Create ReportAgent instance
-            report_agent = ReportAgent(
-                name="Report Generator",
-                prompt_path="prompts/base/report_agent.txt",  # Default to base if jarvis doesn't exist
-                provider=self.provider,
-                verbose=False
-            )
-            
-            # Prepare execution data for report
-            execution_data = {
-                "intent": goal,
-                "plan": [task["task"] for task in structured_plan],
-                "subtask_status": self.execution_state.get("subtask_status", []),
-                "agent_outputs": agents_work_result
-            }
-            
-            # Generate the report
-            report_result, report_reasoning = await report_agent.process(
-                f"Generate a comprehensive execution report for: {goal}",
-                execution_data=execution_data
-            )
-            
-            # Extract PDF path from report result
-            pdf_path = None
-            if "Report saved to:" in report_result:
-                pdf_path = report_result.split("Report saved to:")[-1].strip()
-                self.execution_state["final_report_url"] = pdf_path
-                summary += f"\n\nDetailed report generated: {pdf_path}"
-            
-            pretty_print(f"Execution report generated: {pdf_path}", color="success")
-            
-        except Exception as e:
-            pretty_print(f"Warning: Could not generate execution report: {str(e)}", color="warning")
-            # Continue with normal summary even if report generation fails
-        
-        self.execution_state["status"] = "completed"
-        return summary, ""
-
-    def get_current_plan(self):
-        """
-        Returns the current plan in a format suitable for frontend display.
-        Returns:
-            List[dict]: The current plan with task details.
-        """
-        formatted_plan = []
-        for task_name, task_details in self.current_plan:
-            formatted_task = {
-                "task_name": task_name,
-                "agent": task_details['agent'],
-                "description": task_details['task'],
-                "requirements": task_details.get('need', '')
-            }
-            formatted_plan.append(formatted_task)
-        return formatted_plan
+        pretty_print("Failed to make a valid plan after retries.", "failure")
+        return []

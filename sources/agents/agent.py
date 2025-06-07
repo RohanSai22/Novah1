@@ -1,5 +1,4 @@
-
-from typing import Tuple, Callable
+from typing import Tuple, Callable, Optional, ForwardRef
 from abc import abstractmethod
 import os
 import random
@@ -11,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from sources.memory import Memory
 from sources.utility import pretty_print
 from sources.schemas import executorResult
+
+ExecutionManager = ForwardRef('ExecutionManager')
 
 random.seed(time.time())
 
@@ -39,7 +40,10 @@ class Agent():
         self.type = None
         self.current_directory = os.getcwd()
         self.llm = provider 
-        self.memory = None
+        self.memory = Memory(self.load_prompt(prompt_path),
+                        recover_last_session=False,
+                        memory_compression=False,
+                        model_provider=provider.get_model_name())
         self.tools = {}
         self.blocks_result = []
         self.success = True
@@ -128,12 +132,18 @@ class Agent():
         self.status_message = "Stopped"
     
     @abstractmethod
-    def process(self, prompt, speech_module) -> str:
+    async def process(self, prompt: str, execution_manager: Optional[ExecutionManager] = None, speech_module=None) -> Tuple[str, str]:
         """
-        abstract method, implementation in child class.
-        Process the prompt and return the answer of the agent.
+        Abstract method for agent-specific logic. This is what each agent should implement.
         """
         pass
+    
+    async def execute(self, prompt: str, execution_manager: Optional[ExecutionManager] = None) -> Tuple[str, str]:
+        """
+        Standardized execution entry point for the orchestrator.
+        This method calls the agent-specific process method.
+        """
+        return await self.process(prompt, execution_manager, None)
 
     def remove_reasoning_text(self, text: str) -> None:
         """
